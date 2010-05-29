@@ -871,6 +871,20 @@ AVOutputFormat eac3_muxer = {
 };
 #endif
 
+#if CONFIG_G723_1_DEMUXER
+AVInputFormat g723_1_demuxer = {
+    "g723_1",
+    NULL_IF_CONFIG_SMALL("raw G723.1"),
+    0,
+    NULL,
+    audio_read_header,
+    ff_raw_read_partial_packet,
+    .flags = AVFMT_GENERIC_INDEX,
+    .extensions = "tco",
+    .value = CODEC_ID_G723_1,
+};
+#endif
+
 #if CONFIG_GSM_DEMUXER
 AVInputFormat gsm_demuxer = {
     "gsm",
