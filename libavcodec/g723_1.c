@@ -112,7 +112,8 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
         }
         p->subframe[i].ad_cb_gain = FASTDIV(temp, GAIN_LEVELS);
         if (p->subframe[i].ad_cb_gain < ad_cb_len) {
-            p->subframe[i].amp_index = temp - p->subframe[i].ad_cb_gain * GAIN_LEVELS;
+            p->subframe[i].amp_index = temp - p->subframe[i].ad_cb_gain *
+                                       GAIN_LEVELS;
         } else {
             return -1;
         }
