@@ -227,6 +227,7 @@ void avcodec_register_all(void)
     REGISTER_DECODER (DSICINAUDIO, dsicinaudio);
     REGISTER_DECODER (EAC3, eac3);
     REGISTER_ENCDEC  (FLAC, flac);
+    REGISTER_DECODER (G723_1, g723_1);
     REGISTER_DECODER (IMC, imc);
     REGISTER_DECODER (MACE3, mace3);
     REGISTER_DECODER (MACE6, mace6);

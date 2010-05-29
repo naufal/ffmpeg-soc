@@ -336,6 +336,7 @@ enum CodecID {
     CODEC_ID_ATRAC1,
     CODEC_ID_BINKAUDIO_RDFT,
     CODEC_ID_BINKAUDIO_DCT,
+    CODEC_ID_G723_1,
 
     /* subtitle codecs */
     CODEC_ID_DVD_SUBTITLE= 0x17000,
