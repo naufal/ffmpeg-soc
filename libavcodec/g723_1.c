@@ -3,8 +3,8 @@
 #include "get_bits.h"
 
 typedef struct g723_1_context {
-    uint32_t lsp_index;
-    uint16_t pitch_lag[2];
+    int32_t lsp_index;
+    int16_t pitch_lag[2];
     G723_1_Subframe subframe[4];
     FrameType cur_frame_type;
     Rate cur_rate;

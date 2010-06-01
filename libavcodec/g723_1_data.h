@@ -24,11 +24,12 @@ typedef enum {
  * G723.1 unpacked data subframe
  */
 typedef struct {
-    uint16_t ad_cb_lag;     ///< adaptive codebook lag
-    uint16_t ad_cb_gain;
-    uint16_t trans_gain;
-    uint16_t pulse_pos;
-    uint16_t pulse_sign;
-    uint16_t grid_index;
-    uint16_t amp_index;
+    int16_t ad_cb_lag;     ///< adaptive codebook lag
+    int16_t ad_cb_gain;
+    int16_t trans_gain;
+    int16_t pulse_pos;
+    int16_t pulse_sign;
+    int16_t grid_index;
+    int16_t amp_index;
 } G723_1_Subframe;
+
