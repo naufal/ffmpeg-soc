@@ -1,6 +1,8 @@
 #define SUBFRAMES    4
 #define FRAME_LEN    240
 #define SUBFRAME_LEN (FRAME_LEN / SUBFRAMES)
+#define LPC_ORDER    10
+#define LSP_BANDS    3
 #define PITCH_MIN    18
 #define GAIN_LEVELS  24
 

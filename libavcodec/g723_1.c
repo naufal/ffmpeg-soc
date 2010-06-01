@@ -3,7 +3,7 @@
 #include "get_bits.h"
 
 typedef struct g723_1_context {
-    int32_t lsp_index;
+    int32_t lsp_index[LSP_BANDS];
     int16_t pitch_lag[2];
     G723_1_Subframe subframe[4];
     FrameType cur_frame_type;
@@ -42,7 +42,10 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
         return 0;
     }
 
-    p->lsp_index = get_bits(&gb, 24);
+    // Extract 24 bit lsp indices, 8 bit for each band
+    p->lsp_index[0] = get_bits(&gb, 8);
+    p->lsp_index[1] = get_bits(&gb, 8);
+    p->lsp_index[2] = get_bits(&gb, 8);
 
     if (info_bits == 2) {
         p->cur_frame_type = SIDFrame;
