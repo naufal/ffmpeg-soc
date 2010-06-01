@@ -12,10 +12,9 @@
  * G723.1 frame types
  */
 typedef enum {
-    Frame6k3 = 0,       ///< 6.3 kbps frame rate
-    Frame5k3,           ///< 5.3 kbps frame rate
-    FrameSID,           ///< Silence Insertion Descriptor frame
-    FrameUntransmitted
+    ActiveFrame,        ///< Active speech
+    SIDFrame,           ///< Silence Insertion Descriptor frame
+    UntransmittedFrame
 } FrameType;
 
 static const uint8_t frame_size[4] = {24, 20, 4, 1};
@@ -66,25 +65,29 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
 {
     GetBitContext gb;
     int ad_cb_len;
-    int temp, i;
+    int temp, info_bits, i;
 
     init_get_bits(&gb, buf, buf_size * 8);
 
     // Extract frame type and rate info
-    p->cur_frame_type = get_bits(&gb, 2);
+    info_bits = get_bits(&gb, 2);
 
-    if (p->cur_frame_type == FrameUntransmitted)
+    if (info_bits == 3) {
+        p->cur_frame_type = UntransmittedFrame;
         return 0;
+    }
 
     p->lsp_index = get_bits(&gb, 24);
 
-    if (p->cur_frame_type == FrameSID) {
+    if (info_bits == 2) {
+        p->cur_frame_type = SIDFrame;
         p->subframe[0].amp_index = get_bits(&gb, 6);
         return 0;
     }
 
     // Extract the info common to both rates
-    p->cur_rate = p->cur_frame_type ? Rate5k3 : Rate6k3;
+    p->cur_rate       = info_bits ? Rate5k3 : Rate6k3;
+    p->cur_frame_type = ActiveFrame;
 
     p->pitch_lag[0] = get_bits(&gb, 7);
     if (p->pitch_lag[0] > 123)       // test if forbidden code
@@ -122,7 +125,7 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     for (i = 0; i < SUBFRAMES; i++)
         p->subframe[i].grid_index = get_bits(&gb, 1);
 
-    if (p->cur_frame_type == Frame6k3) {
+    if (p->cur_rate == Rate6k3) {
         skip_bits(&gb, 1);  // skip reserved bit
 
         // Compute pulse_pos index using the 13-bit combined position index
@@ -149,7 +152,7 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
         p->subframe[1].pulse_sign = get_bits(&gb, 5);
         p->subframe[2].pulse_sign = get_bits(&gb, 6);
         p->subframe[3].pulse_sign = get_bits(&gb, 5);
-    } else { // Frame5k3
+    } else { // Rate5k3
         for (i = 0; i < SUBFRAMES; i++)
             p->subframe[i].pulse_pos  = get_bits(&gb, 12);
 
