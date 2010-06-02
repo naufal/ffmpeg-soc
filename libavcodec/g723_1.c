@@ -1,20 +1,28 @@
 #include "avcodec.h"
 #define ALT_BITSTREAM_READER_LE
 #include "get_bits.h"
+#include "g723_1_data.h"
 
 typedef struct g723_1_context {
-    int32_t lsp_index[LSP_BANDS];
+    int8_t lsp_index[LSP_BANDS];
+    int16_t prev_lsp[LPC_ORDER];
     int16_t pitch_lag[2];
     G723_1_Subframe subframe[4];
     FrameType cur_frame_type;
+    FrameType past_frame_type;
     Rate cur_rate;
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
 {
+    G723_1_Context *p  = avctx->priv_data;
+
     avctx->sample_fmt  = SAMPLE_FMT_S16;
     avctx->channels    = 1;
     avctx->sample_rate = 8000;
+
+    memcpy(p->prev_lsp, dc_lsp, LPC_ORDER * sizeof(int16_t));
+
     return 0;
 }
 
@@ -131,6 +139,85 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     return 0;
 }
 
+/*
+ * Perform inverse quantization of LSP frequencies.
+ *
+ * @param cur_lsp    the current LSP vector
+ * @param prev_lsp   the previous LSP vector
+ */
+static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp, int8_t *lsp_index, int bad_frame)
+{
+    int min_dist, pred;
+    int i, j, temp1, temp2, stable;
+
+    // Check for frame erasure
+    if (!bad_frame) {
+        min_dist = 0x100;
+        pred = 12288;
+        lsp_index[0] *= 3;
+        lsp_index[1] *= 3;
+        lsp_index[2] *= 4;
+    } else {
+        min_dist = 0x200;
+        pred = 23552;
+        lsp_index[0] = lsp_index[1] = lsp_index[2] = 0;
+    }
+
+    // Get the VQ table entry corresponding to the transmitted index
+    cur_lsp[0] = lsp_band0[lsp_index[0]];
+    cur_lsp[1] = lsp_band0[lsp_index[0] + 1];
+    cur_lsp[2] = lsp_band0[lsp_index[0] + 2];
+    cur_lsp[3] = lsp_band1[lsp_index[1]];
+    cur_lsp[4] = lsp_band1[lsp_index[1] + 1];
+    cur_lsp[5] = lsp_band1[lsp_index[1] + 2];
+    cur_lsp[6] = lsp_band2[lsp_index[2]];
+    cur_lsp[7] = lsp_band2[lsp_index[2] + 1];
+    cur_lsp[8] = lsp_band2[lsp_index[2] + 2];
+    cur_lsp[9] = lsp_band2[lsp_index[2] + 3];
+
+    // Add predicted vector & DC component to the previously quantized vector
+    for (i = 0; i < LPC_ORDER; i++) {
+        temp1      = av_clip_int16(prev_lsp[i] - dc_lsp[i]);
+        temp2      = av_clip_int16((temp1 * pred >> 15) + 1);
+        cur_lsp[i] = av_clip_int16(cur_lsp[i] + temp2);
+        cur_lsp[i] = av_clip_int16(cur_lsp[i] + dc_lsp[i]);
+    }
+
+    for (i = 0; i < LPC_ORDER; i++) {
+        cur_lsp[0]             = FFMAX(cur_lsp[0],  0x180);
+        cur_lsp[LPC_ORDER - 1] = FFMIN(cur_lsp[LPC_ORDER - 1], 0x7e00);
+
+        // Stability check
+        for (j = 1; j < LPC_ORDER; j++) {
+            temp1 = av_clip_int16(min_dist + cur_lsp[j - 1]);
+            temp1 = av_clip_int16(temp1 - cur_lsp[j]);
+            if (temp1 > 0) {
+                temp1 >>= 1;
+                cur_lsp[j - 1] =  av_clip_int16(cur_lsp[j - 1] - temp1);
+                cur_lsp[j] =  av_clip_int16(cur_lsp[j] + temp1);
+            }
+        }
+
+        stable = 1;
+
+        for (j = 1; j < LPC_ORDER; j++) {
+            temp1 = av_clip_int16(cur_lsp[j - 1] + min_dist);
+            temp1 = av_clip_int16(temp1 - 4);
+            temp1 = av_clip_int16(temp1 - cur_lsp[j]);
+            if (temp1 > 0) {
+                stable = 0;
+                break;
+            }
+        }
+
+        if (stable)
+            break;
+    }
+
+    if (!stable)
+        memcpy(cur_lsp, prev_lsp, LPC_ORDER * sizeof(int16_t));
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                               int *data_size, AVPacket *avpkt)
 {
@@ -138,14 +225,27 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
 
+    int16_t cur_lsp[LPC_ORDER];
+    int bad_frame, erased_frames;
+
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
         *data_size = 0;
         return buf_size;
     }
 
     if (unpack_bitstream(p, buf, buf_size) < 0) {
-        av_log(avctx, AV_LOG_ERROR, "G723.1: Bad frame\n");
-        return AVERROR_INVALIDDATA;
+        bad_frame         = 1;
+        p->cur_frame_type = p->past_frame_type == ActiveFrame ?
+                            ActiveFrame : UntransmittedFrame;
+    }
+
+    if(p->cur_frame_type == ActiveFrame) {
+        if (!bad_frame)
+            erased_frames = 0;
+        else if(erased_frames != 3)
+            erased_frames++;
+
+        inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, bad_frame);
     }
 
     return frame_size[p->cur_frame_type];
