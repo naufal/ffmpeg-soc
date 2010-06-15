@@ -1,6 +1,8 @@
 #include "avcodec.h"
 #define ALT_BITSTREAM_READER_LE
 #include "get_bits.h"
+#include "acelp_vectors.h"
+#include "lsp.h"
 #include "g723_1_data.h"
 
 typedef struct g723_1_context {
@@ -218,6 +220,44 @@ static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp, int8_t *lsp_index
         memcpy(cur_lsp, prev_lsp, LPC_ORDER * sizeof(int16_t));
 }
 
+/*
+ * Quantize LSP frequencies by interpolation and convert them to
+ * the corresponding LPC coefficients.
+ *
+ * @param lpc      buffer for LPC coefficients
+ * @param cur_lsp  the current LSP vector
+ * @param prev_lsp the previous LSP vector
+ */
+static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
+{
+    int i, j;
+    int16_t *ptr = lpc;
+
+    // cur_lsp * 0.25 + prev_lsp * 0.75
+    ff_acelp_weighted_vector_sum(&lpc[1], cur_lsp, prev_lsp,
+                                 4096, 12288, 1 << 13, 14, LPC_ORDER);
+    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER + 1], cur_lsp, prev_lsp,
+                                 8192, 8192, 1 << 13, 14, LPC_ORDER);
+    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER * 2 + 2], cur_lsp, prev_lsp,
+                                 12288, 4096, 1 << 13, 14, LPC_ORDER);
+    memcpy(&lpc[LPC_ORDER * 3 + 3], cur_lsp, LPC_ORDER * sizeof(int16_t));
+
+    for (i = 0; i < SUBFRAMES; i++) {
+        // Calculate cosine
+        for (j = 1; j <= LPC_ORDER; j++) {
+            int index      = ptr[j] >> 7;
+            int offset     = ptr[j] & 0x7f;
+            int64_t temp1  = cos_tab[index] << 16;
+            int temp2      = (cos_tab[index + 1] - cos_tab[index]) *
+                             ((offset << 8) + 0x80) << 1;
+            ptr[j] = av_clipl_int32(((temp1 + temp2) << 1) + (1 << 15)) >> 16;
+        }
+
+        ff_acelp_lsp2lpc(ptr, ptr, LPC_ORDER >> 1);
+        ptr += LPC_ORDER + 1;
+    }
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                               int *data_size, AVPacket *avpkt)
 {
@@ -226,6 +266,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int buf_size       = avpkt->size;
 
     int16_t cur_lsp[LPC_ORDER];
+    int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
     int bad_frame, erased_frames;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
@@ -246,6 +287,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             erased_frames++;
 
         inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, bad_frame);
+        lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
     }
 
     return frame_size[p->cur_frame_type];
