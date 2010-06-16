@@ -231,7 +231,7 @@ static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp, int8_t *lsp_index
 static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
 {
     int i, j;
-    int16_t *lsp_ptr = lpc;
+    int16_t *lpc_ptr = lpc;
 
     // cur_lsp * 0.25 + prev_lsp * 0.75
     ff_acelp_weighted_vector_sum(&lpc[1], cur_lsp, prev_lsp,
@@ -245,16 +245,16 @@ static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
     for (i = 0; i < SUBFRAMES; i++) {
         // Calculate cosine
         for (j = 1; j <= LPC_ORDER; j++) {
-            int index      = lsp_ptr[j] >> 7;
-            int offset     = lsp_ptr[j] & 0x7f;
+            int index      = lpc_ptr[j] >> 7;
+            int offset     = lpc_ptr[j] & 0x7f;
             int64_t temp1  = cos_tab[index] << 16;
             int temp2      = (cos_tab[index + 1] - cos_tab[index]) *
                              ((offset << 8) + 0x80) << 1;
-            lsp_ptr[j] = av_clipl_int32(((temp1 + temp2) << 1) + (1 << 15)) >> 16;
+            lpc_ptr[j] = av_clipl_int32(((temp1 + temp2) << 1) + (1 << 15)) >> 16;
         }
 
-        ff_acelp_lsp2lpc(lsp_ptr, lsp_ptr, LPC_ORDER >> 1);
-        lsp_ptr += LPC_ORDER + 1;
+        ff_acelp_lsp2lpc(lpc_ptr, lpc_ptr, LPC_ORDER >> 1);
+        lpc_ptr += LPC_ORDER + 1;
     }
 }
 
