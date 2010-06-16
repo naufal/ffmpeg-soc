@@ -87,7 +87,7 @@ static void lsp2poly(int* f, const int16_t* lsp, int lp_half_order)
     }
 }
 
-void ff_acelp_lsp2lpc(int16_t* lp, const int16_t* lsp, int lp_half_order)
+void ff_acelp_lsp2lpc(int16_t* lp, const int16_t* lsp, int lp_half_order, int shift, int rounder, int sign)
 {
     int i;
     int f1[lp_half_order+1]; // (3.22)
@@ -103,9 +103,10 @@ void ff_acelp_lsp2lpc(int16_t* lp, const int16_t* lsp, int lp_half_order)
         int ff1 = f1[i] + f1[i-1]; // (3.22)
         int ff2 = f2[i] - f2[i-1]; // (3.22)
 
-        ff1 += 1 << 10; // for rounding
-        lp[i]    = (ff1 + ff2) >> 11; // divide by 2 and (3.22) -> (3.12)
-        lp[(lp_half_order << 1) + 1 - i] = (ff1 - ff2) >> 11; // divide by 2 and (3.22) -> (3.12)
+        ff1 += rounder; // for rounding
+        // divide by 2 and scale
+        lp[i]    = av_clip_int16(sign * av_clip_int16((ff1 + ff2) >> (shift + 1)));
+        lp[(lp_half_order << 1) + 1 - i] = av_clip_int16(sign * av_clip_int16((ff1 - ff2) >> (shift + 1)));
     }
 }
 
@@ -122,10 +123,10 @@ void ff_acelp_lp_decode(int16_t* lp_1st, int16_t* lp_2nd, const int16_t* lsp_2nd
         lsp_1st[i] = (lsp_2nd[i] + lsp_prev[i]) >> 1;
 #endif
 
-    ff_acelp_lsp2lpc(lp_1st, lsp_1st, lp_order >> 1);
+    ff_acelp_lsp2lpc(lp_1st, lsp_1st, lp_order >> 1, 10, 1 << 10, 1);
 
     /* LSP values for second subframe (3.2.5 of G.729)*/
-    ff_acelp_lsp2lpc(lp_2nd, lsp_2nd, lp_order >> 1);
+    ff_acelp_lsp2lpc(lp_2nd, lsp_2nd, lp_order >> 1, 10, 1 << 10, 1);
 }
 
 void ff_lsp2polyf(const double *lsp, double *f, int lp_half_order)

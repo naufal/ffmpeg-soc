@@ -67,8 +67,11 @@ void ff_acelp_lsf2lsp(int16_t *lsp, const int16_t *lsf, int lp_order);
  * \param lp [out] decoded LP coefficients (-0x8000 <= (3.12) < 0x8000)
  * \param lsp LSP coefficients (-0x8000 <= (0.15) < 0x8000)
  * \param lp_half_order LP filter order, divided by 2
+ * \param shift the result will be shifted right by this value
+ * \param rounder this value will be added to the result
+ * \param sign determines if the result is to be negated (-1 or 1)
  */
-void ff_acelp_lsp2lpc(int16_t* lp, const int16_t* lsp, int lp_half_order);
+void ff_acelp_lsp2lpc(int16_t* lp, const int16_t* lsp, int lp_half_order, int shift, int rounder, int sign);
 
 /**
  * \brief Interpolate LSP for the first subframe and convert LSP -> LP for both subframes (3.2.5 and 3.2.6 of G.729)
