@@ -253,7 +253,7 @@ static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
             lpc_ptr[j] = av_clipl_int32(((temp1 + temp2) << 1) + (1 << 15)) >> 16;
         }
 
-        ff_acelp_lsp2lpc(lpc_ptr, lpc_ptr, LPC_ORDER >> 1);
+        ff_acelp_lsp2lpc(lpc_ptr, lpc_ptr, LPC_ORDER >> 1, 9, 1 << 9, -1);
         lpc_ptr += LPC_ORDER + 1;
     }
 }
