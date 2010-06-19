@@ -9,6 +9,7 @@ typedef struct g723_1_context {
     int8_t lsp_index[LSP_BANDS];
     int16_t prev_lsp[LPC_ORDER];
     int16_t pitch_lag[2];
+    int16_t prev_excitation[PITCH_MAX];
     G723_1_Subframe subframe[4];
     FrameType cur_frame_type;
     FrameType past_frame_type;
@@ -258,6 +259,78 @@ static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
     }
 }
 
+/*
+ * Generate fixed codebook excitation vector
+ *
+ * @param vector decoded excitation vector
+ * @param index  the current subframe index
+ */
+static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
+                               Rate cur_rate, int16_t pitch_lag, int index)
+{
+    int temp, i, j;
+
+    memset(vector, 0, SUBFRAMES);
+
+    if (cur_rate == Rate6k3) {
+        if (subfrm.pulse_pos >= max_pos[index])
+            return;
+
+        // Decode amplitudes and positions
+        j = PULSE_MAX - pulses[index];
+        temp = subfrm.pulse_pos;
+        for (i = 0; i < SUBFRAME_LEN / GRID_SIZE; i++) {
+            temp -= combinatorial_table[j][i];
+            if (temp >= 0)
+                break;
+            temp += combinatorial_table[j++][i];
+            if (!(subfrm.pulse_sign & (1 << (PULSE_MAX - j)))) {
+                vector[subfrm.grid_index + GRID_SIZE * i] =
+                                        -fixed_cb_gain[subfrm.amp_index];
+            } else {
+                vector[subfrm.grid_index + GRID_SIZE * i] =
+                                         fixed_cb_gain[subfrm.amp_index];
+            }
+            if (j == PULSE_MAX)
+                break;
+        }
+        // Generate Dirac train
+        if (subfrm.trans_gain == 1) {
+            int16_t temp_vector[SUBFRAME_LEN];
+            memcpy(temp_vector, vector, SUBFRAME_LEN);
+            for (i = pitch_lag; i < SUBFRAME_LEN; i += pitch_lag)
+                for (j = 0; j < SUBFRAME_LEN - i; j++)
+                    vector[i + j] += temp_vector[j];
+        }
+    } else { // Rate5k3
+        int16_t cb_gain  = fixed_cb_gain[subfrm.amp_index];
+        int16_t cb_shift = subfrm.grid_index;
+        int16_t cb_sign  = subfrm.pulse_sign;
+        int16_t cb_pos   = subfrm.pulse_pos;
+        int offset, beta, lag, temp;
+
+        for (i = 0; i < 8; i += 2) {
+            offset =  ((cb_pos & 7) << 3) + cb_shift + i;
+            vector[offset] = (cb_sign & 1) ? cb_gain : -cb_gain;
+            cb_pos  >>= 3;
+            cb_sign >>= 1;
+        }
+
+        // Enhance harmonic components
+        lag  = pitch_contrib[subfrm.ad_cb_gain << 1] + pitch_lag +
+               subfrm.ad_cb_lag - 1;
+        beta = pitch_contrib[(subfrm.ad_cb_lag << 1) + 1];
+
+        if (lag < SUBFRAME_LEN - 2) {
+            for (i = lag; i < SUBFRAME_LEN; i++) {
+                temp = av_clip_int16(beta * vector[i - lag]);
+                vector[i] = av_clip_int16(vector[i] + temp);
+            }
+        }
+    }
+}
+
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                               int *data_size, AVPacket *avpkt)
 {
@@ -267,7 +340,10 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
 
     int16_t cur_lsp[LPC_ORDER];
     int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
-    int bad_frame, erased_frames;
+    int16_t temp_vector[SUBFRAMES + PITCH_MAX];
+    int16_t *vector_ptr;
+    int16_t interp_gain;
+    int bad_frame, erased_frames, i;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
         *data_size = 0;
@@ -288,6 +364,19 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
 
         inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, bad_frame);
         lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
+
+        // Generate the excitation for the frame
+        memcpy(temp_vector, p->prev_excitation, PITCH_MAX);
+        vector_ptr = temp_vector + PITCH_MAX;
+        if (!erased_frames) {
+            // Update interpolation gain memory
+            interp_gain = fixed_cb_gain[(p->subframe[2].amp_index +
+                                        p->subframe[3].amp_index) >> 1];
+            for (i = 0; i < SUBFRAMES; i++) {
+                gen_fcb_excitation(vector_ptr, p->subframe[i], p->cur_rate,
+                                   p->pitch_lag[i >> 1], i);
+            }
+        }
     }
 
     return frame_size[p->cur_frame_type];
