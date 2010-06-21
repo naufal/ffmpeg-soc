@@ -340,7 +340,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
 
     int16_t cur_lsp[LPC_ORDER];
     int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
-    int16_t temp_vector[SUBFRAMES + PITCH_MAX];
+    int16_t temp_vector[FRAME_LEN + PITCH_MAX];
     int16_t *vector_ptr;
     int16_t interp_gain;
     int bad_frame, erased_frames, i;
