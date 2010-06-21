@@ -343,7 +343,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int16_t temp_vector[FRAME_LEN + PITCH_MAX];
     int16_t *vector_ptr;
     int16_t interp_gain;
-    int bad_frame, erased_frames, i;
+    int bad_frame = 0, erased_frames = 0, i;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
         *data_size = 0;
