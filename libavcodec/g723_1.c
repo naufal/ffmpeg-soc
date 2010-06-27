@@ -330,6 +330,45 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
     }
 }
 
+/*
+ * Generate adaptive codebook excitation
+ *
+ * @param vector restored excitation vector
+ */
+static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
+                               int16_t pitch_lag, G723_1_Subframe subfrm,
+                               Rate cur_rate)
+{
+    int16_t residual[SUBFRAME_LEN + PITCH_ORDER - 1];
+    const int16_t *cb_ptr;
+    int lag = pitch_lag + subfrm.ad_cb_lag - 1;
+    int temp = PITCH_MAX - PITCH_ORDER / 2 - lag;
+    int i, j;
+    int64_t sum;
+
+    residual[0] = prev_excitation[temp];
+    residual[1] = prev_excitation[temp + 1];
+
+    for (i = 2; i < SUBFRAME_LEN + PITCH_ORDER - 1; i++)
+        residual[i] = prev_excitation[temp + i % lag];
+
+    // Select quantization table
+    if (cur_rate == Rate6k3 && pitch_lag < SUBFRAME_LEN - 2)
+        cb_ptr = adaptive_cb_gain85;
+    else
+        cb_ptr = adaptive_cb_gain170;
+
+    // Calculate adaptive vector
+    cb_ptr += subfrm.ad_cb_gain * 20;
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        sum = 0;
+        for (j = 0; j < PITCH_ORDER; j++) {
+            temp = av_clipl_int32((int64_t)residual[i + j] * cb_ptr[j] << 1);
+            sum  = av_clipl_int32(sum + (temp << 1));
+        }
+        vector[i] = av_clipl_int32(sum + (1 << 15)) >> 16;
+    }
+}
 
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                               int *data_size, AVPacket *avpkt)
@@ -341,9 +380,10 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int16_t cur_lsp[LPC_ORDER];
     int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
     int16_t temp_vector[FRAME_LEN + PITCH_MAX];
+    int16_t acb_vector[SUBFRAME_LEN];
     int16_t *vector_ptr;
     int16_t interp_gain;
-    int bad_frame = 0, erased_frames = 0, i;
+    int bad_frame = 0, erased_frames = 0, i, j;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
         *data_size = 0;
@@ -375,6 +415,15 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             for (i = 0; i < SUBFRAMES; i++) {
                 gen_fcb_excitation(vector_ptr, p->subframe[i], p->cur_rate,
                                    p->pitch_lag[i >> 1], i);
+                gen_acb_excitation(acb_vector, &temp_vector[SUBFRAME_LEN * i],
+                                   p->pitch_lag[i >> 1], p->subframe[i],
+                                   p->cur_rate);
+                // Get the total excitation
+                for (j = 0; j < SUBFRAME_LEN; j++) {
+                    vector_ptr[j] = av_clip_int16(vector_ptr[j] << 1);
+                    vector_ptr[j] = av_clip_int16(vector_ptr[j] + acb_vector[j]);
+                }
+                vector_ptr += SUBFRAME_LEN;
             }
         }
     }
