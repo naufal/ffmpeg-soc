@@ -350,7 +350,7 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     residual[1] = prev_excitation[temp + 1];
 
     for (i = 2; i < SUBFRAME_LEN + PITCH_ORDER - 1; i++)
-        residual[i] = prev_excitation[temp + i % lag];
+        residual[i] = prev_excitation[temp + (i - 2) % lag];
 
     // Select quantization table
     if (cur_rate == Rate6k3 && pitch_lag < SUBFRAME_LEN - 2)
