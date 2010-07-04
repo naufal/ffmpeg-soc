@@ -465,7 +465,7 @@ static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
                                   (temp2 << 16));
         }
 
-        //scaling_gain = sqrt(tgt_eng/pf_res^2)
+        // scaling_gain = sqrt(tgt_eng/pf_res^2)
         ppf->sc_gain = ff_sqrt(temp1 << 15);
     } else {
         ppf->opt_gain = 0;
@@ -494,7 +494,7 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
      */
     int energy[5] = {0, 0, 0, 0, 0};
 
-    int16_t fwd_lag =  get_ppf_lag(buf, &energy[1], pitch_lag, index, -1);
+    int16_t fwd_lag  = get_ppf_lag(buf, &energy[1], pitch_lag, index, -1);
     int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, index,  1);
 
     int offset = SUBFRAME_LEN * index;
@@ -562,7 +562,7 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
 }
 
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
-                              int *data_size, AVPacket *avpkt)
+                               int *data_size, AVPacket *avpkt)
 {
     G723_1_Context *p  = avctx->priv_data;
     const uint8_t *buf = avpkt->data;
