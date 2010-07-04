@@ -142,6 +142,22 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     return 0;
 }
 
+static int normalize_int32(int x)
+{
+    int i;
+    int y = x;
+    if (x) {
+        if (x == -1)
+            return INT32_MIN;
+        if (x < 0)
+            x = ~x;
+        for (i = 0; x < 0x40000000; i++)
+            x <<= 1;
+        y = av_clipl_int32((int64_t)y << i);
+    }
+    return y;
+}
+
 /*
  * Perform inverse quantization of LSP frequencies.
  *
@@ -370,13 +386,190 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     }
 }
 
+/*
+ * Search for pitch postfilter forward/backward lag
+ * and compute cross-correlation.
+ *
+ * @param buf decoded excitation
+ * @param ccr cross-correlation
+ * @param dir forward(1) or backward(-1)
+ */
+static int16_t get_ppf_lag(int16_t *buf, int *ccr, int16_t pitch_lag, int index,
+                           int dir)
+{
+    int temp1, temp2, i, j;
+    int offset = SUBFRAME_LEN * index;
+    int lag = 0;
+
+    pitch_lag = FFMIN(PITCH_MAX - 3, pitch_lag);
+
+    for (i = pitch_lag - 3; i <= pitch_lag + 3; i++) {
+        temp1 = 0;
+        for (j = 0; j < SUBFRAME_LEN; j++) {
+            temp2 = av_clipl_int32((int64_t)buf[offset + j] *
+                                   buf[offset + j + dir * i] << 1);
+            temp1 = av_clipl_int32(temp1 + temp2);
+
+            if (temp1 > *ccr) {
+                *ccr = temp1;
+                lag  = i;
+            }
+        }
+    }
+    return lag;
+}
+
+/*
+ * Calculate pitch postfilter optimal and scaling gains.
+ *
+ * @param lag     pitch postfilter forward/backward lag
+ * @param ppf     pitch postfilter parameters
+ * @param tgt_eng target energy
+ * @param ccr     cross-correlation
+ * @param res_eng residual energy
+ */
+static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
+                           int tgt_eng, int ccr, int res_eng)
+{
+    int pf_residual;     // square of postfiltered residual
+    int64_t temp1, temp2;
+
+    ppf->index = lag;
+
+    temp1 = tgt_eng * res_eng >> 1;
+    temp2 = av_clipl_int32((int64_t)ccr * ccr << 1);
+
+    if (temp2 > temp1) {
+        if (ccr >= res_eng) {
+            ppf->opt_gain = ppf_gain_weight[cur_rate];
+        } else {
+            ppf->opt_gain = av_clip_int16(ccr * (1 << 15) / res_eng);
+            ppf->opt_gain = av_clip_int16(ppf->opt_gain *
+                                          ppf_gain_weight[cur_rate]);
+        }
+        // pf_res^2 = tgt_eng + 2*ccr*gain + res_eng*gain^2
+        temp1       = tgt_eng << 15;
+        temp2       = av_clipl_int32((int64_t)ccr * ppf->opt_gain << 1);
+        pf_residual = av_clipl_int32(temp1 + temp2);
+        temp1       = av_clip_int16(ppf->opt_gain * ppf->opt_gain);
+        temp2       = av_clipl_int32(temp1 * res_eng);
+        pf_residual = av_clipl_int32(pf_residual + temp2 + (1 << 15));
+
+        temp1 = tgt_eng << 15;
+        temp2 = pf_residual & 0xffff0000;
+
+        if (temp1 >= temp2) {
+            temp1 = 0x7fff;
+        } else {
+            temp1 = av_clip_int16((int64_t)temp1 * (1 << 15) /
+                                  (temp2 << 16));
+        }
+
+        //scaling_gain = sqrt(tgt_eng/pf_res^2)
+        ppf->sc_gain = ff_sqrt(temp1 << 15);
+    } else {
+        ppf->opt_gain = 0;
+        ppf->sc_gain  = 0x7fff;
+    }
+
+    ppf->opt_gain = av_clip_int16(ppf->opt_gain * ppf->opt_gain);
+}
+
+/*
+ * Calculate pitch postfilter parameters.
+ *
+ * @param buf   decoded excitation
+ * @param ppf   pitch postfilter parameters
+ * @param index current subframe index
+ */
+static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
+                           Rate cur_rate, int index)
+{
+    /*
+     * 0 - target energy
+     * 1 - forward cross-correlation
+     * 2 - forward residual energy
+     * 3 - backward cross-correlation
+     * 4 - backward residual energy
+     */
+    int energy[5] = {0, 0, 0, 0, 0};
+
+    int16_t fwd_lag =  get_ppf_lag(buf, &energy[1], pitch_lag, index, -1);
+    int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, index,  1);
+
+    int offset = SUBFRAME_LEN * index;
+    int i;
+    int64_t temp1, temp2;
+
+    ppf->index    = 0;
+    ppf->opt_gain = 0;
+    ppf->sc_gain  = 0x7fff;
+
+    // Case 0, Section 3.6
+    if (!back_lag && !fwd_lag)
+        return;
+
+    // Compute target energy
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        temp1     = av_clipl_int32((int64_t)buf[offset + i] *
+                                   buf[offset + i] << 1);
+        energy[0] = av_clipl_int32(energy[0] + temp1);
+    }
+
+    // Compute forward residual energy
+    if (fwd_lag) {
+        for (i = 0; i < SUBFRAME_LEN; i++) {
+            temp1     = av_clipl_int32((int64_t)buf[offset + fwd_lag + i] *
+                                       buf[offset + fwd_lag + i] << 1);
+            energy[2] = av_clipl_int32(energy[2] + temp1);
+        }
+    }
+
+    // Compute backward residual energy
+    if (back_lag) {
+        for (i = 0; i < SUBFRAME_LEN; i++) {
+            temp1     = av_clipl_int32((int64_t)buf[offset - back_lag + i] *
+                                       buf[offset - back_lag + i] << 1);
+            energy[4] = av_clipl_int32(energy[4] + temp1);
+        }
+    }
+
+    for (i = 0; i < 5; i++)
+        energy[i] = normalize_int32(energy[i]) >> 16;
+
+    if (fwd_lag && !back_lag) {  // Case 1
+        comp_ppf_gains(fwd_lag,  ppf, cur_rate, energy[0], energy[1],
+                       energy[2]);
+    } else if (!fwd_lag) {       // Case 2
+        comp_ppf_gains(back_lag, ppf, cur_rate, energy[0], energy[3],
+                       energy[4]);
+    } else {                     // Case 3
+
+        // Select the largest of energy[1]^2/energy[2] and energy[3]^2/energy[4]
+        temp1 = av_clip_int16((energy[1] * energy[1] + (1 << 14)) >> 15);
+        temp1 = av_clipl_int32(temp1 * energy[4]);
+        temp2 = av_clip_int16((energy[3] * energy[3] + (1 << 14)) >> 15);
+        temp2 = av_clipl_int32(temp2 * energy[2]);
+
+        if (temp1 >= temp2) {
+            comp_ppf_gains(fwd_lag,  ppf, cur_rate, energy[0], energy[1],
+                           energy[2]);
+        } else {
+            comp_ppf_gains(back_lag, ppf, cur_rate, energy[0], energy[3],
+                           energy[4]);
+        }
+    }
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                               int *data_size, AVPacket *avpkt)
 {
     G723_1_Context *p  = avctx->priv_data;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
+    int16_t *out       = data;
 
+    PPFParam ppf[SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
     int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
     int16_t temp_vector[FRAME_LEN + PITCH_MAX];
@@ -424,6 +617,17 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                     vector_ptr[j] = av_clip_int16(vector_ptr[j] + acb_vector[j]);
                 }
                 vector_ptr += SUBFRAME_LEN;
+            }
+            // Perform pitch postfiltering
+            vector_ptr = temp_vector + PITCH_MAX;
+            for (i = 0; i < SUBFRAMES; i++) {
+                int offset = SUBFRAME_LEN * i;
+                comp_ppf_coeff(vector_ptr, p->pitch_lag[i >> 1],
+                               ppf + i, p->cur_rate, i);
+                ff_acelp_weighted_vector_sum(out, vector_ptr + offset,
+                                             vector_ptr + offset + ppf[i].index,
+                                             ppf[i].sc_gain, ppf[i].opt_gain,
+                                             1 << 15, 16, SUBFRAME_LEN);
             }
         }
     }

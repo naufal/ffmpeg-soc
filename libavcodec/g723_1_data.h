@@ -41,6 +41,20 @@ typedef struct {
 } G723_1_Subframe;
 
 /*
+ * Pitch postfilter parameters
+ */
+typedef struct {
+    int16_t index;    ///< postfilter backward/forward lag
+    int16_t opt_gain; ///< optimal gain
+    int16_t sc_gain;  ///< scaling gain
+} PPFParam;
+
+/*
+ * Postfilter gain weighting factors scaled by 2^15
+ */
+static const int16_t ppf_gain_weight[2] = {0x1800, 0x2000};
+
+/*
  * LSP DC component
  */
 static const int16_t dc_lsp[LPC_ORDER] = {
