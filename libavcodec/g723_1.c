@@ -624,7 +624,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                 int offset = SUBFRAME_LEN * i;
                 comp_ppf_coeff(vector_ptr, p->pitch_lag[i >> 1],
                                ppf + i, p->cur_rate, i);
-                ff_acelp_weighted_vector_sum(out, vector_ptr + offset,
+                ff_acelp_weighted_vector_sum(out + offset, vector_ptr + offset,
                                              vector_ptr + offset + ppf[i].index,
                                              ppf[i].sc_gain, ppf[i].opt_gain,
                                              1 << 15, 16, SUBFRAME_LEN);
