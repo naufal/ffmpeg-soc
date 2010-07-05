@@ -620,12 +620,11 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             }
             // Perform pitch postfiltering
             vector_ptr = temp_vector + PITCH_MAX;
-            for (i = 0; i < SUBFRAMES; i++) {
-                int offset = SUBFRAME_LEN * i;
+            for (i = 0; i < FRAME_LEN; i += SUBFRAME_LEN) {
                 comp_ppf_coeff(vector_ptr, p->pitch_lag[i >> 1],
                                ppf + i, p->cur_rate, i);
-                ff_acelp_weighted_vector_sum(out + offset, vector_ptr + offset,
-                                             vector_ptr + offset + ppf[i].index,
+                ff_acelp_weighted_vector_sum(out + i, vector_ptr + i,
+                                             vector_ptr + i + ppf[i].index,
                                              ppf[i].sc_gain, ppf[i].opt_gain,
                                              1 << 15, 16, SUBFRAME_LEN);
             }
