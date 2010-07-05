@@ -443,26 +443,23 @@ static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
         if (ccr >= res_eng) {
             ppf->opt_gain = ppf_gain_weight[cur_rate];
         } else {
-            ppf->opt_gain = av_clip_int16(ccr * (1 << 15) / res_eng);
+            ppf->opt_gain = av_clip_int16((ccr << 15) / res_eng);
             ppf->opt_gain = av_clip_int16(ppf->opt_gain *
-                                          ppf_gain_weight[cur_rate]);
+                                          ppf_gain_weight[cur_rate] >> 15);
         }
         // pf_res^2 = tgt_eng + 2*ccr*gain + res_eng*gain^2
-        temp1       = tgt_eng << 15;
-        temp2       = av_clipl_int32((int64_t)ccr * ppf->opt_gain << 1);
-        pf_residual = av_clipl_int32(temp1 + temp2);
-        temp1       = av_clip_int16(ppf->opt_gain * ppf->opt_gain);
-        temp2       = av_clipl_int32(temp1 * res_eng);
-        pf_residual = av_clipl_int32(pf_residual + temp2 + (1 << 15));
+        tgt_eng     <<= 15;
+        temp1       =   av_clipl_int32((int64_t)ccr * ppf->opt_gain << 1);
+        pf_residual =   av_clipl_int32(tgt_eng + temp1);
+        temp1       =   av_clip_int16(ppf->opt_gain * ppf->opt_gain >> 15);
+        temp1       =   av_clipl_int32(temp1 * res_eng);
+        pf_residual =   av_clipl_int32(pf_residual + temp1 + (1 << 15)) &
+                        0xffff0000;
 
-        temp1 = tgt_eng << 15;
-        temp2 = pf_residual & 0xffff0000;
-
-        if (temp1 >= temp2) {
+        if (tgt_eng >= pf_residual) {
             temp1 = 0x7fff;
         } else {
-            temp1 = av_clip_int16((int64_t)temp1 * (1 << 15) /
-                                  (temp2 << 16));
+            temp1 = av_clip_int16(((int64_t)tgt_eng << 15) / pf_residual);
         }
 
         // scaling_gain = sqrt(tgt_eng/pf_res^2)
@@ -472,7 +469,7 @@ static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
         ppf->sc_gain  = 0x7fff;
     }
 
-    ppf->opt_gain = av_clip_int16(ppf->opt_gain * ppf->opt_gain);
+    ppf->opt_gain = av_clip_int16(ppf->opt_gain * ppf->opt_gain >> 15);
 }
 
 /*
