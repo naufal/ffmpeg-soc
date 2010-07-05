@@ -626,7 +626,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                 ff_acelp_weighted_vector_sum(out + i, vector_ptr + i,
                                              vector_ptr + i + ppf[i].index,
                                              ppf[i].sc_gain, ppf[i].opt_gain,
-                                             1 << 15, 16, SUBFRAME_LEN);
+                                             1 << 14, 15, SUBFRAME_LEN);
             }
         }
     }
