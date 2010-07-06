@@ -144,7 +144,7 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
 
 static int16_t normalize_bits_int32(int x)
 {
-    int i = 0;
+    int16_t i = 0;
     if (x) {
         if (x == -1)
             return 31;
