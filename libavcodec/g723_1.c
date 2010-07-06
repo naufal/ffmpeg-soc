@@ -567,7 +567,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     PPFParam ppf[SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
     int16_t lpc[SUBFRAMES * LPC_ORDER + 4];
-    int16_t temp_vector[FRAME_LEN + PITCH_MAX];
+    int16_t excitation[FRAME_LEN + PITCH_MAX];
     int16_t acb_vector[SUBFRAME_LEN];
     int16_t *vector_ptr;
     int16_t interp_gain;
@@ -594,8 +594,8 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
 
         // Generate the excitation for the frame
-        memcpy(temp_vector, p->prev_excitation, PITCH_MAX);
-        vector_ptr = temp_vector + PITCH_MAX;
+        memcpy(excitation, p->prev_excitation, PITCH_MAX);
+        vector_ptr = excitation + PITCH_MAX;
         if (!erased_frames) {
             // Update interpolation gain memory
             interp_gain = fixed_cb_gain[(p->subframe[2].amp_index +
@@ -603,7 +603,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             for (i = 0; i < SUBFRAMES; i++) {
                 gen_fcb_excitation(vector_ptr, p->subframe[i], p->cur_rate,
                                    p->pitch_lag[i >> 1], i);
-                gen_acb_excitation(acb_vector, &temp_vector[SUBFRAME_LEN * i],
+                gen_acb_excitation(acb_vector, &excitation[SUBFRAME_LEN * i],
                                    p->pitch_lag[i >> 1], p->subframe[i],
                                    p->cur_rate);
                 // Get the total excitation
@@ -613,16 +613,25 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                 }
                 vector_ptr += SUBFRAME_LEN;
             }
-            // Perform pitch postfiltering
-            vector_ptr = temp_vector + PITCH_MAX;
-            for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++) {
+            // Save the excitation
+            memcpy(out, excitation + PITCH_MAX, FRAME_LEN);
+
+            vector_ptr = excitation + PITCH_MAX;
+
+            for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
                 comp_ppf_coeff(vector_ptr + i, p->pitch_lag[i >> 1],
                                ppf + j, p->cur_rate);
+
+            // Restore the original excitation
+            memcpy(excitation, p->prev_excitation, PITCH_MAX);
+            memcpy(vector_ptr, out, FRAME_LEN);
+
+            // Peform pitch postfiltering
+            for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
                 ff_acelp_weighted_vector_sum(out + i, vector_ptr + i,
-                                             vector_ptr + i + ppf[i].index,
+                                             vector_ptr + i + ppf[j].index,
                                              ppf[j].sc_gain, ppf[j].opt_gain,
                                              1 << 14, 15, SUBFRAME_LEN);
-            }
         }
     }
 
