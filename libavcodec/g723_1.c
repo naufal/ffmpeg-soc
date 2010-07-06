@@ -142,7 +142,7 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     return 0;
 }
 
-static int normalize_bits_int32(int x)
+static int16_t normalize_bits_int32(int x)
 {
     int i = 0;
     if (x) {
@@ -492,7 +492,8 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
     int16_t fwd_lag  = get_ppf_lag(buf, &energy[1], pitch_lag, SUBFRAME_LEN, 1);
     int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, SUBFRAME_LEN,-1);
 
-    int scale, i;
+    int16_t scale;
+    int i;
     int64_t temp1, temp2;
 
     ppf->index    = 0;
