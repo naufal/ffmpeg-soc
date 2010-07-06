@@ -142,20 +142,18 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     return 0;
 }
 
-static int normalize_int32(int x)
+static int normalize_bits_int32(int x)
 {
-    int i;
-    int y = x;
+    int i = 0;
     if (x) {
         if (x == -1)
-            return INT32_MIN;
+            return 31;
         if (x < 0)
             x = ~x;
         for (i = 0; x < 0x40000000; i++)
             x <<= 1;
-        y = av_clipl_int32((int64_t)y << i);
     }
-    return y;
+    return i;
 }
 
 /*
@@ -494,7 +492,7 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
     int16_t fwd_lag  = get_ppf_lag(buf, &energy[1], pitch_lag, SUBFRAME_LEN, 1);
     int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, SUBFRAME_LEN,-1);
 
-    int i;
+    int scale, i;
     int64_t temp1, temp2;
 
     ppf->index    = 0;
@@ -529,8 +527,16 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
         }
     }
 
+    // Normalize and shorten
+    temp1 = 0;
+    for (i = 0; i < 5; i++) {
+        if (energy[i] > temp1)
+            temp1 = energy[i];
+    }
+
+    scale = normalize_bits_int32(temp1);
     for (i = 0; i < 5; i++)
-        energy[i] = normalize_int32(energy[i]) >> 16;
+        energy[i] = av_clipl_int32(energy[i] << scale) >> 16;
 
     if (fwd_lag && !back_lag) {  // Case 1
         comp_ppf_gains(fwd_lag,  ppf, cur_rate, energy[0], energy[1],
