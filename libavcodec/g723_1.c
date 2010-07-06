@@ -387,27 +387,27 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
 }
 
 /*
- * Search for pitch postfilter forward/backward lag
+ * Search for the best pitch postfilter forward/backward lag
  * and compute cross-correlation.
  *
  * @param buf decoded excitation
  * @param ccr cross-correlation
  * @param dir forward(1) or backward(-1)
  */
-static int16_t get_ppf_lag(int16_t *buf, int *ccr, int16_t pitch_lag, int index,
-                           int dir)
+static int16_t get_ppf_lag(int16_t *buf, int *ccr, int16_t pitch_lag,
+                           int length, int dir)
 {
-    int temp1, temp2, i, j;
-    int offset = SUBFRAME_LEN * index;
     int lag = 0;
+    int i, j;
+    int64_t temp1, temp2;
 
     pitch_lag = FFMIN(PITCH_MAX - 3, pitch_lag);
 
     for (i = pitch_lag - 3; i <= pitch_lag + 3; i++) {
         temp1 = 0;
-        for (j = 0; j < SUBFRAME_LEN; j++) {
-            temp2 = av_clipl_int32((int64_t)buf[offset + j] *
-                                   buf[offset + j + dir * i] << 1);
+        for (j = 0; j < length; j++) {
+            temp2 = av_clipl_int32((int64_t)buf[j] *
+                                   buf[j + dir * i] << 1);
             temp1 = av_clipl_int32(temp1 + temp2);
 
             if (temp1 > *ccr) {
@@ -480,7 +480,7 @@ static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
  * @param index current subframe index
  */
 static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
-                           Rate cur_rate, int index)
+                           Rate cur_rate)
 {
     /*
      * 0 - target energy
@@ -491,10 +491,9 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
      */
     int energy[5] = {0, 0, 0, 0, 0};
 
-    int16_t fwd_lag  = get_ppf_lag(buf, &energy[1], pitch_lag, index, -1);
-    int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, index,  1);
+    int16_t fwd_lag  = get_ppf_lag(buf, &energy[1], pitch_lag, SUBFRAME_LEN, 1);
+    int16_t back_lag = get_ppf_lag(buf, &energy[3], pitch_lag, SUBFRAME_LEN,-1);
 
-    int offset = SUBFRAME_LEN * index;
     int i;
     int64_t temp1, temp2;
 
@@ -508,16 +507,15 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
 
     // Compute target energy
     for (i = 0; i < SUBFRAME_LEN; i++) {
-        temp1     = av_clipl_int32((int64_t)buf[offset + i] *
-                                   buf[offset + i] << 1);
+        temp1     = av_clipl_int32((int64_t)buf[i] * buf[i] << 1);
         energy[0] = av_clipl_int32(energy[0] + temp1);
     }
 
     // Compute forward residual energy
     if (fwd_lag) {
         for (i = 0; i < SUBFRAME_LEN; i++) {
-            temp1     = av_clipl_int32((int64_t)buf[offset + fwd_lag + i] *
-                                       buf[offset + fwd_lag + i] << 1);
+            temp1     = av_clipl_int32((int64_t)buf[i + fwd_lag] *
+                                       buf[i + fwd_lag] << 1);
             energy[2] = av_clipl_int32(energy[2] + temp1);
         }
     }
@@ -525,8 +523,8 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
     // Compute backward residual energy
     if (back_lag) {
         for (i = 0; i < SUBFRAME_LEN; i++) {
-            temp1     = av_clipl_int32((int64_t)buf[offset - back_lag + i] *
-                                       buf[offset - back_lag + i] << 1);
+            temp1     = av_clipl_int32((int64_t)buf[i - back_lag] *
+                                       buf[i - back_lag] << 1);
             energy[4] = av_clipl_int32(energy[4] + temp1);
         }
     }
@@ -617,12 +615,12 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             }
             // Perform pitch postfiltering
             vector_ptr = temp_vector + PITCH_MAX;
-            for (i = 0; i < FRAME_LEN; i += SUBFRAME_LEN) {
-                comp_ppf_coeff(vector_ptr, p->pitch_lag[i >> 1],
-                               ppf + i, p->cur_rate, i);
+            for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++) {
+                comp_ppf_coeff(vector_ptr + i, p->pitch_lag[i >> 1],
+                               ppf + j, p->cur_rate);
                 ff_acelp_weighted_vector_sum(out + i, vector_ptr + i,
                                              vector_ptr + i + ppf[i].index,
-                                             ppf[i].sc_gain, ppf[i].opt_gain,
+                                             ppf[j].sc_gain, ppf[j].opt_gain,
                                              1 << 14, 15, SUBFRAME_LEN);
             }
         }
