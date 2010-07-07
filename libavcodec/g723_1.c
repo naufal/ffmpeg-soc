@@ -142,6 +142,28 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     return 0;
 }
 
+static inline int16_t abs_16(int16_t x)
+{
+    int16_t mask = x >> 15;
+    int16_t v = (x + mask) ^ mask;
+    return (v & INT16_MIN) ? INT16_MAX : v;
+}
+
+static int16_t normalize_bits_int16(int16_t x)
+{
+    int16_t i = 0;
+
+    if (x) {
+        if (x == -1)
+            return 15;
+        if (x < 0)
+            x = ~x;
+        for (i = 0; x < 0x4000; i++)
+            x <<= 1;
+    }
+    return i;
+}
+
 static int16_t normalize_bits_int32(int x)
 {
     int16_t i = 0;
@@ -154,6 +176,29 @@ static int16_t normalize_bits_int32(int x)
             x <<= 1;
     }
     return i;
+}
+
+static int16_t scale_vector(int16_t *vector, int16_t length)
+{
+    int16_t scale, max = 0;
+    int i;
+
+    const int16_t shift_table[16] = {
+        0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
+        0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x7fff
+    };
+
+    for (i = 0; i < length; i++) {
+        int16_t v = abs_16(vector[i]);
+        max = FFMAX(v, max);
+    }
+
+    scale = shift_table[normalize_bits_int16(max)];
+
+    for (i = 0; i < length; i++)
+        vector[i] = (int16_t)av_clipl_int32(vector[i] * scale << 1) >> 4;
+
+    return scale - 3;
 }
 
 /*
