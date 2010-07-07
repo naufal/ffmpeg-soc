@@ -156,7 +156,7 @@ static inline int dot_product(const int16_t *v1, const int16_t *v2, int length)
 
     for (i = 0; i < length; i++) {
         prod = av_clipl_int32((int64_t)v1[i] * v2[i] << 1);
-        sum  = av_clipl_int32(sum + temp);
+        sum  = av_clipl_int32(sum + prod);
     }
     return sum;
 }
@@ -252,7 +252,7 @@ static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp, int8_t *lsp_index
     // Add predicted vector & DC component to the previously quantized vector
     for (i = 0; i < LPC_ORDER; i++) {
         temp1      = av_clip_int16(prev_lsp[i] - dc_lsp[i]);
-        temp2      = av_clip_int16((temp1 * pred >> 15) + 1);
+        temp2      = av_clip_int16((temp1 * pred + (1 << 14)) >> 15);
         cur_lsp[i] = av_clip_int16(cur_lsp[i] + temp2);
         cur_lsp[i] = av_clip_int16(cur_lsp[i] + dc_lsp[i]);
     }
@@ -394,7 +394,7 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
 
         if (lag < SUBFRAME_LEN - 2) {
             for (i = lag; i < SUBFRAME_LEN; i++) {
-                temp = av_clip_int16(beta * vector[i - lag]);
+                temp = av_clip_int16(beta * vector[i - lag] >> 15);
                 vector[i] = av_clip_int16(vector[i] + temp);
             }
         }
