@@ -149,6 +149,18 @@ static inline int16_t abs_16(int16_t x)
     return (v & INT16_MIN) ? INT16_MAX : v;
 }
 
+static inline int dot_product(const int16_t *v1, const int16_t *v2, int length)
+{
+    int i, sum = 0;
+    int64_t prod;
+
+    for (i = 0; i < length; i++) {
+        prod = av_clipl_int32((int64_t)v1[i] * v2[i] << 1);
+        sum  = av_clipl_int32(sum + temp);
+    }
+    return sum;
+}
+
 static int16_t normalize_bits_int16(int16_t x)
 {
     int16_t i = 0;
@@ -402,7 +414,7 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     const int16_t *cb_ptr;
     int lag = pitch_lag + subfrm.ad_cb_lag - 1;
     int temp = PITCH_MAX - PITCH_ORDER / 2 - lag;
-    int i, j;
+    int i;
     int64_t sum;
 
     residual[0] = prev_excitation[temp];
@@ -420,12 +432,8 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     // Calculate adaptive vector
     cb_ptr += subfrm.ad_cb_gain * 20;
     for (i = 0; i < SUBFRAME_LEN; i++) {
-        sum = 0;
-        for (j = 0; j < PITCH_ORDER; j++) {
-            temp = av_clipl_int32((int64_t)residual[i + j] * cb_ptr[j] << 1);
-            sum  = av_clipl_int32(sum + (temp << 1));
-        }
-        vector[i] = av_clipl_int32(sum + (1 << 15)) >> 16;
+        sum = dot_product(residual + i, cb_ptr, PITCH_ORDER);
+        vector[i] = av_clipl_int32((sum << 1) + (1 << 15)) >> 16;
     }
 }
 
@@ -437,26 +445,20 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
  * @param ccr cross-correlation
  * @param dir forward(1) or backward(-1)
  */
-static int16_t get_ppf_lag(int16_t *buf, int *ccr, int16_t pitch_lag,
+static int16_t get_ppf_lag(int16_t *buf, int *ccr_max, int16_t pitch_lag,
                            int length, int dir)
 {
-    int lag = 0;
-    int i, j;
-    int64_t temp1, temp2;
+    int ccr, lag = 0;
+    int i;
 
     pitch_lag = FFMIN(PITCH_MAX - 3, pitch_lag);
 
     for (i = pitch_lag - 3; i <= pitch_lag + 3; i++) {
-        temp1 = 0;
-        for (j = 0; j < length; j++) {
-            temp2 = av_clipl_int32((int64_t)buf[j] *
-                                   buf[j + dir * i] << 1);
-            temp1 = av_clipl_int32(temp1 + temp2);
+        ccr = dot_product(buf, buf + dir * i, length);
 
-            if (temp1 > *ccr) {
-                *ccr = temp1;
-                lag  = i;
-            }
+        if (ccr > *ccr_max) {
+            *ccr_max = ccr;
+            lag  = i;
         }
     }
     return lag;
@@ -550,35 +552,20 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
         return;
 
     // Compute target energy
-    for (i = 0; i < SUBFRAME_LEN; i++) {
-        temp1     = av_clipl_int32((int64_t)buf[i] * buf[i] << 1);
-        energy[0] = av_clipl_int32(energy[0] + temp1);
-    }
+    energy[0] = dot_product(buf, buf, SUBFRAME_LEN);
 
     // Compute forward residual energy
-    if (fwd_lag) {
-        for (i = 0; i < SUBFRAME_LEN; i++) {
-            temp1     = av_clipl_int32((int64_t)buf[i + fwd_lag] *
-                                       buf[i + fwd_lag] << 1);
-            energy[2] = av_clipl_int32(energy[2] + temp1);
-        }
-    }
+    if (fwd_lag)
+        energy[2] = dot_product(buf + fwd_lag, buf + fwd_lag, SUBFRAME_LEN);
 
     // Compute backward residual energy
-    if (back_lag) {
-        for (i = 0; i < SUBFRAME_LEN; i++) {
-            temp1     = av_clipl_int32((int64_t)buf[i - back_lag] *
-                                       buf[i - back_lag] << 1);
-            energy[4] = av_clipl_int32(energy[4] + temp1);
-        }
-    }
+    if (back_lag)
+        energy[4] = dot_product(buf - back_lag, buf - back_lag, SUBFRAME_LEN);
 
     // Normalize and shorten
     temp1 = 0;
-    for (i = 0; i < 5; i++) {
-        if (energy[i] > temp1)
-            temp1 = energy[i];
-    }
+    for (i = 0; i < 5; i++)
+        temp1 = FFMAX(energy[i], temp1);
 
     scale = normalize_bits_int32(temp1);
     for (i = 0; i < 5; i++)
