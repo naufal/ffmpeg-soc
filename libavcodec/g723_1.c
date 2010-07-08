@@ -14,6 +14,10 @@ typedef struct g723_1_context {
     FrameType cur_frame_type;
     FrameType past_frame_type;
     Rate cur_rate;
+
+    int16_t interp_index;
+    int16_t sid_gain;
+    int16_t cur_gain;
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -595,6 +599,54 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
     }
 }
 
+/*
+ * Classify frames as voiced/unvoiced.
+ *
+ * @param buf     decoded excitation vector
+ * @param exc_eng excitation energy estimation
+ * @param scale   scaling factor of exc_eng
+ *
+ * @return residual interpolation index if voiced, 0 otherwise
+ */
+static int16_t comp_interp_index(int16_t *buf, int16_t pitch_lag,
+                                 int16_t *exc_eng, int16_t *scale)
+{
+    int16_t index;
+    int16_t *vector_ptr;
+    int ccr, tgt_eng, best_eng;
+    int temp;
+
+    *scale     = scale_vector(buf, FRAME_LEN + PITCH_MAX);
+
+    pitch_lag  = FFMIN(PITCH_MAX - 3, pitch_lag);
+    vector_ptr = buf + PITCH_MAX + 2 * SUBFRAME_LEN;
+    index      = pitch_lag;
+
+    // Compute maximum backward cross-correlation
+    ccr   = 0;
+    index = get_ppf_lag(vector_ptr, &ccr, pitch_lag, SUBFRAME_LEN * 2, -1);
+    ccr   = av_clipl_int32((int64_t)ccr + (1 << 15)) >> 16;
+
+    // Compute target energy
+    tgt_eng   = dot_product(vector_ptr, vector_ptr, SUBFRAME_LEN * 2);
+    *exc_eng  = av_clipl_int32(tgt_eng + (1 << 15)) >> 16;
+
+    if (ccr <= 0)
+        return 0;
+
+    // Compute best energy
+    best_eng = dot_product(vector_ptr - index, vector_ptr - index,
+                           SUBFRAME_LEN * 2);
+    best_eng = av_clipl_int32((int64_t)best_eng + (1 << 15)) >> 16;
+
+    temp = best_eng * tgt_eng >> 3;
+
+    if (temp < ccr * ccr)
+        return index;
+    else
+        return 0;
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                int *data_size, AVPacket *avpkt)
 {
@@ -654,6 +706,9 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             }
             // Save the excitation
             memcpy(out, excitation + PITCH_MAX, FRAME_LEN);
+
+            p->interp_index = comp_interp_index(excitation, p->pitch_lag[1],
+                                                &p->sid_gain, &p->cur_gain);
 
             vector_ptr = excitation + PITCH_MAX;
 
