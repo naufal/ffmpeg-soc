@@ -353,7 +353,7 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
 {
     int temp, i, j;
 
-    memset(vector, 0, SUBFRAMES);
+    memset(vector, 0, SUBFRAMES * sizeof(int16_t));
 
     if (cur_rate == Rate6k3) {
         if (subfrm.pulse_pos >= max_pos[index])
@@ -380,7 +380,7 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
         // Generate Dirac train
         if (subfrm.trans_gain == 1) {
             int16_t temp_vector[SUBFRAME_LEN];
-            memcpy(temp_vector, vector, SUBFRAME_LEN);
+            memcpy(temp_vector, vector, SUBFRAME_LEN * sizeof(int16_t));
             for (i = pitch_lag; i < SUBFRAME_LEN; i += pitch_lag)
                 for (j = 0; j < SUBFRAME_LEN - i; j++)
                     vector[i + j] += temp_vector[j];
@@ -720,7 +720,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
 
         // Generate the excitation for the frame
-        memcpy(excitation, p->prev_excitation, PITCH_MAX);
+        memcpy(excitation, p->prev_excitation, PITCH_MAX * sizeof(int16_t));
         vector_ptr = excitation + PITCH_MAX;
         if (!erased_frames) {
             // Update interpolation gain memory
@@ -740,7 +740,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                 vector_ptr += SUBFRAME_LEN;
             }
             // Save the excitation
-            memcpy(out, excitation + PITCH_MAX, FRAME_LEN);
+            memcpy(out, excitation + PITCH_MAX, FRAME_LEN * sizeof(int16_t));
 
             p->interp_index = comp_interp_index(excitation, p->pitch_lag[1],
                                                 &p->sid_gain, &p->cur_gain);
@@ -752,8 +752,8 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                ppf + j, p->cur_rate);
 
             // Restore the original excitation
-            memcpy(excitation, p->prev_excitation, PITCH_MAX);
-            memcpy(vector_ptr, out, FRAME_LEN);
+            memcpy(excitation, p->prev_excitation, PITCH_MAX * sizeof(int16_t));
+            memcpy(vector_ptr, out, FRAME_LEN * sizeof(int16_t));
 
             // Peform pitch postfiltering
             for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
