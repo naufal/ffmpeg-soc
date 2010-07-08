@@ -15,7 +15,9 @@ typedef struct g723_1_context {
     FrameType past_frame_type;
     Rate cur_rate;
 
+    int16_t random_seed;
     int16_t interp_index;
+    int16_t interp_gain;
     int16_t sid_gain;
     int16_t cur_gain;
 } G723_1_Context;
@@ -151,6 +153,12 @@ static inline int16_t abs_16(int16_t x)
     int16_t mask = x >> 15;
     int16_t v = (x + mask) ^ mask;
     return (v & INT16_MIN) ? INT16_MAX : v;
+}
+
+static inline int16_t prand(int16_t *rseed)
+{
+    *rseed = *rseed * 521 + 259;
+    return *rseed;
 }
 
 static inline int dot_product(const int16_t *v1, const int16_t *v2, int length)
@@ -647,6 +655,34 @@ static int16_t comp_interp_index(int16_t *buf, int16_t pitch_lag,
         return 0;
 }
 
+/*
+ * Peform residual interpolation based on frame classification.
+ *
+ * @param buf   decoded excitation vector
+ * @prarm out   output vector
+ * @param lag   decoded pitch lag
+ * @param gain  interpolated gain
+ * @param rseed seed for random number generator
+ */
+static void residual_interp(int16_t *buf, int16_t *out, int16_t lag,
+                            int16_t gain, int16_t *rseed)
+{
+    int i;
+    if (lag) { // Voiced
+        int16_t *vector_ptr = buf + PITCH_MAX;
+        // Attenuate
+        for (i = 0; i < lag; i++)
+            vector_ptr[i - lag] = vector_ptr[i - lag] * 0x6000 >> 15;
+        for (i = 0; i < FRAME_LEN; i++)
+            vector_ptr[i] = vector_ptr[i - lag];
+        memcpy(out, vector_ptr, FRAME_LEN * sizeof(int16_t));
+    } else {  // Unvoiced
+        for (i = 0; i < FRAME_LEN; i++)
+            out[i] = gain * prand(rseed) >> 15;
+        memset(buf, 0, (FRAME_LEN + PITCH_MAX) * sizeof(int16_t));
+    }
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                int *data_size, AVPacket *avpkt)
 {
@@ -661,7 +697,6 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int16_t excitation[FRAME_LEN + PITCH_MAX];
     int16_t acb_vector[SUBFRAME_LEN];
     int16_t *vector_ptr;
-    int16_t interp_gain;
     int bad_frame = 0, erased_frames = 0, i, j;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
@@ -689,7 +724,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         vector_ptr = excitation + PITCH_MAX;
         if (!erased_frames) {
             // Update interpolation gain memory
-            interp_gain = fixed_cb_gain[(p->subframe[2].amp_index +
+            p->interp_gain = fixed_cb_gain[(p->subframe[2].amp_index +
                                         p->subframe[3].amp_index) >> 1];
             for (i = 0; i < SUBFRAMES; i++) {
                 gen_fcb_excitation(vector_ptr, p->subframe[i], p->cur_rate,
@@ -726,6 +761,17 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                              vector_ptr + i + ppf[j].index,
                                              ppf[j].sc_gain, ppf[j].opt_gain,
                                              1 << 14, 15, SUBFRAME_LEN);
+        } else {
+            p->interp_gain = (p->interp_gain * 3 + 2) >> 2;
+            if (erased_frames == 3) {
+                // Mute output
+                memset(excitation, 0, (FRAME_LEN + PITCH_MAX) * sizeof(int16_t));
+                memset(out, 0, FRAME_LEN * sizeof(int16_t));
+            } else {
+                // Regenerate frame
+                residual_interp(excitation, out, p->interp_index,
+                                p->interp_gain, &p->random_seed);
+            }
         }
     }
 
