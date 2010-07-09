@@ -231,7 +231,8 @@ static int16_t scale_vector(int16_t *vector, int16_t length)
  * @param cur_lsp    the current LSP vector
  * @param prev_lsp   the previous LSP vector
  */
-static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp, int8_t *lsp_index, int bad_frame)
+static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp,
+                          int8_t *lsp_index, int bad_frame)
 {
     int min_dist, pred;
     int i, j, temp1, temp2, stable;
