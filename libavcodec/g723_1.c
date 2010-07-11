@@ -6,7 +6,7 @@
 #include "g723_1_data.h"
 
 typedef struct g723_1_context {
-    int8_t lsp_index[LSP_BANDS];
+    uint8_t lsp_index[LSP_BANDS];
     int16_t prev_lsp[LPC_ORDER];
     int16_t pitch_lag[2];
     int16_t prev_excitation[PITCH_MAX];
@@ -60,9 +60,9 @@ static int unpack_bitstream(G723_1_Context *p, const uint8_t *buf,
     }
 
     // Extract 24 bit lsp indices, 8 bit for each band
-    p->lsp_index[0] = get_bits(&gb, 8);
-    p->lsp_index[1] = get_bits(&gb, 8);
     p->lsp_index[2] = get_bits(&gb, 8);
+    p->lsp_index[1] = get_bits(&gb, 8);
+    p->lsp_index[0] = get_bits(&gb, 8);
 
     if (info_bits == 2) {
         p->cur_frame_type = SIDFrame;

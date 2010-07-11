@@ -34,10 +34,10 @@ typedef struct {
     int16_t ad_cb_lag;     ///< adaptive codebook lag
     int16_t ad_cb_gain;
     int16_t trans_gain;
-    int16_t pulse_pos;
     int16_t pulse_sign;
     int16_t grid_index;
     int16_t amp_index;
+    int32_t pulse_pos;
 } G723_1_Subframe;
 
 /*
