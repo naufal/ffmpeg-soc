@@ -720,6 +720,9 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, bad_frame);
         lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
 
+        // Save the lsp_vector for the next frame
+        memcpy(p->prev_lsp, cur_lsp, LPC_ORDER * sizeof(int16_t));
+
         // Generate the excitation for the frame
         memcpy(excitation, p->prev_excitation, PITCH_MAX * sizeof(int16_t));
         vector_ptr = excitation + PITCH_MAX;
