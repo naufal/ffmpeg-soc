@@ -232,7 +232,7 @@ static int16_t scale_vector(int16_t *vector, int16_t length)
  * @param prev_lsp   the previous LSP vector
  */
 static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp,
-                          int8_t *lsp_index, int bad_frame)
+                          uint8_t *lsp_index, int bad_frame)
 {
     int min_dist, pred;
     int i, j, temp1, temp2, stable;
@@ -241,9 +241,6 @@ static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp,
     if (!bad_frame) {
         min_dist = 0x100;
         pred = 12288;
-        lsp_index[0] *= 3;
-        lsp_index[1] *= 3;
-        lsp_index[2] *= 4;
     } else {
         min_dist = 0x200;
         pred = 23552;
@@ -251,16 +248,16 @@ static void inverse_quant(int16_t *cur_lsp, int16_t *prev_lsp,
     }
 
     // Get the VQ table entry corresponding to the transmitted index
-    cur_lsp[0] = lsp_band0[lsp_index[0]];
-    cur_lsp[1] = lsp_band0[lsp_index[0] + 1];
-    cur_lsp[2] = lsp_band0[lsp_index[0] + 2];
-    cur_lsp[3] = lsp_band1[lsp_index[1]];
-    cur_lsp[4] = lsp_band1[lsp_index[1] + 1];
-    cur_lsp[5] = lsp_band1[lsp_index[1] + 2];
-    cur_lsp[6] = lsp_band2[lsp_index[2]];
-    cur_lsp[7] = lsp_band2[lsp_index[2] + 1];
-    cur_lsp[8] = lsp_band2[lsp_index[2] + 2];
-    cur_lsp[9] = lsp_band2[lsp_index[2] + 3];
+    cur_lsp[0] = lsp_band0[lsp_index[0]][0];
+    cur_lsp[1] = lsp_band0[lsp_index[0]][1];
+    cur_lsp[2] = lsp_band0[lsp_index[0]][2];
+    cur_lsp[3] = lsp_band1[lsp_index[1]][0];
+    cur_lsp[4] = lsp_band1[lsp_index[1]][1];
+    cur_lsp[5] = lsp_band1[lsp_index[1]][2];
+    cur_lsp[6] = lsp_band2[lsp_index[2]][0];
+    cur_lsp[7] = lsp_band2[lsp_index[2]][1];
+    cur_lsp[8] = lsp_band2[lsp_index[2]][2];
+    cur_lsp[9] = lsp_band2[lsp_index[2]][3];
 
     // Add predicted vector & DC component to the previously quantized vector
     for (i = 0; i < LPC_ORDER; i++) {
@@ -779,7 +776,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         }
     }
 
-    return frame_size[p->cur_frame_type];
+    return cur_size;
 }
 
 AVCodec g723_1_decoder = {
