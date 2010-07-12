@@ -318,11 +318,11 @@ static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
     // cur_lsp * 0.25 + prev_lsp * 0.75
     ff_acelp_weighted_vector_sum(&lpc[1], cur_lsp, prev_lsp,
                                  4096, 12288, 1 << 13, 14, LPC_ORDER);
-    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER + 1], cur_lsp, prev_lsp,
+    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER + 2], cur_lsp, prev_lsp,
                                  8192, 8192, 1 << 13, 14, LPC_ORDER);
-    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER * 2 + 2], cur_lsp, prev_lsp,
+    ff_acelp_weighted_vector_sum(&lpc[LPC_ORDER * 2 + 3], cur_lsp, prev_lsp,
                                  12288, 4096, 1 << 13, 14, LPC_ORDER);
-    memcpy(&lpc[LPC_ORDER * 3 + 3], cur_lsp, LPC_ORDER * sizeof(int16_t));
+    memcpy(&lpc[LPC_ORDER * 3 + 4], cur_lsp, LPC_ORDER * sizeof(int16_t));
 
     for (i = 0; i < SUBFRAMES; i++) {
         // Calculate cosine
