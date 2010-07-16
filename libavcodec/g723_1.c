@@ -2,6 +2,7 @@
 #define ALT_BITSTREAM_READER_LE
 #include "get_bits.h"
 #include "acelp_vectors.h"
+#include "celp_filters.h"
 #include "lsp.h"
 #include "g723_1_data.h"
 
@@ -10,6 +11,7 @@ typedef struct g723_1_context {
     int16_t prev_lsp[LPC_ORDER];
     int16_t pitch_lag[2];
     int16_t prev_excitation[PITCH_MAX];
+    int16_t filter_mem[LPC_ORDER];
     G723_1_Subframe subframe[4];
     FrameType cur_frame_type;
     FrameType past_frame_type;
@@ -778,6 +780,22 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         }
     }
 
+    vector_ptr = out + LPC_ORDER;
+    for (i = 0; i < SUBFRAMES; i++) {
+
+        // Fill with the last 10 values of the output vector
+        memcpy(vector_ptr - LPC_ORDER, p->filter_mem,
+               LPC_ORDER * sizeof(int16_t));
+        // Perform 10th order LPC synthesis
+        ff_celp_lp_synthesis_filter(vector_ptr, &lpc[i * LPC_ORDER + i + 1],
+                                    vector_ptr, SUBFRAME_LEN, LPC_ORDER,
+                                    0, 1, 1 << 12);
+        // Store the last 10 values of the output vector
+        memcpy(p->filter_mem, vector_ptr + SUBFRAME_LEN - LPC_ORDER,
+               LPC_ORDER * sizeof(int16_t));
+
+        vector_ptr += SUBFRAME_LEN;
+    }
     return frame_size[p->cur_frame_type];
 }
 
