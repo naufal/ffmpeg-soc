@@ -14,6 +14,7 @@ typedef struct g723_1_context {
     FrameType cur_frame_type;
     FrameType past_frame_type;
     Rate cur_rate;
+    int erased_frames;
 
     int16_t random_seed;
     int16_t interp_index;
@@ -220,7 +221,7 @@ static int16_t scale_vector(int16_t *vector, int16_t length)
     scale = shift_table[normalize_bits_int16(max)];
 
     for (i = 0; i < length; i++)
-        vector[i] = (int16_t)av_clipl_int32(vector[i] * scale << 1) >> 4;
+        vector[i] = (int16_t)(av_clipl_int32(vector[i] * scale << 1) >> 4);
 
     return scale - 3;
 }
@@ -351,7 +352,7 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
 {
     int temp, i, j;
 
-    memset(vector, 0, SUBFRAMES * sizeof(int16_t));
+    memset(vector, 0, SUBFRAME_LEN * sizeof(int16_t));
 
     if (cur_rate == Rate6k3) {
         if (subfrm.pulse_pos >= max_pos[index])
@@ -363,9 +364,9 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
         for (i = 0; i < SUBFRAME_LEN / GRID_SIZE; i++) {
             temp -= combinatorial_table[j][i];
             if (temp >= 0)
-                break;
+                continue;
             temp += combinatorial_table[j++][i];
-            if (!(subfrm.pulse_sign & (1 << (PULSE_MAX - j)))) {
+            if (subfrm.pulse_sign & (1 << (PULSE_MAX - j))) {
                 vector[subfrm.grid_index + GRID_SIZE * i] =
                                         -fixed_cb_gain[subfrm.amp_index];
             } else {
@@ -400,7 +401,7 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
         // Enhance harmonic components
         lag  = pitch_contrib[subfrm.ad_cb_gain << 1] + pitch_lag +
                subfrm.ad_cb_lag - 1;
-        beta = pitch_contrib[(subfrm.ad_cb_lag << 1) + 1];
+        beta = pitch_contrib[(subfrm.ad_cb_gain << 1) + 1];
 
         if (lag < SUBFRAME_LEN - 2) {
             for (i = lag; i < SUBFRAME_LEN; i++) {
@@ -430,6 +431,7 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     residual[0] = prev_excitation[temp];
     residual[1] = prev_excitation[temp + 1];
 
+    temp += 2;
     for (i = 2; i < SUBFRAME_LEN + PITCH_ORDER - 1; i++)
         residual[i] = prev_excitation[temp + (i - 2) % lag];
 
@@ -524,7 +526,7 @@ static void comp_ppf_gains(int16_t lag, PPFParam *ppf, Rate cur_rate,
         ppf->sc_gain  = 0x7fff;
     }
 
-    ppf->opt_gain = av_clip_int16(ppf->opt_gain * ppf->opt_gain >> 15);
+    ppf->opt_gain = av_clip_int16(ppf->opt_gain * ppf->sc_gain >> 15);
 }
 
 /*
@@ -585,7 +587,7 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
         comp_ppf_gains(fwd_lag,  ppf, cur_rate, energy[0], energy[1],
                        energy[2]);
     } else if (!fwd_lag) {       // Case 2
-        comp_ppf_gains(back_lag, ppf, cur_rate, energy[0], energy[3],
+        comp_ppf_gains(-back_lag, ppf, cur_rate, energy[0], energy[3],
                        energy[4]);
     } else {                     // Case 3
 
@@ -599,7 +601,7 @@ static void comp_ppf_coeff(int16_t *buf, int16_t pitch_lag, PPFParam *ppf,
             comp_ppf_gains(fwd_lag,  ppf, cur_rate, energy[0], energy[1],
                            energy[2]);
         } else {
-            comp_ppf_gains(back_lag, ppf, cur_rate, energy[0], energy[3],
+            comp_ppf_gains(-back_lag, ppf, cur_rate, energy[0], energy[3],
                            energy[4]);
         }
     }
@@ -645,7 +647,7 @@ static int16_t comp_interp_index(int16_t *buf, int16_t pitch_lag,
                            SUBFRAME_LEN * 2);
     best_eng = av_clipl_int32((int64_t)best_eng + (1 << 15)) >> 16;
 
-    temp = best_eng * tgt_eng >> 3;
+    temp = best_eng * *exc_eng >> 3;
 
     if (temp < ccr * ccr)
         return index;
@@ -695,7 +697,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int16_t excitation[FRAME_LEN + PITCH_MAX];
     int16_t acb_vector[SUBFRAME_LEN];
     int16_t *vector_ptr;
-    int bad_frame = 0, erased_frames = 0, i, j;
+    int bad_frame = 0, i, j;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
         *data_size = 0;
@@ -704,15 +706,15 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
 
     if (unpack_bitstream(p, buf, buf_size) < 0) {
         bad_frame         = 1;
-        p->cur_frame_type = p->past_frame_type == ActiveFrame ?
+        p->cur_frame_type = p->cur_frame_type == ActiveFrame ?
                             ActiveFrame : UntransmittedFrame;
     }
 
     if(p->cur_frame_type == ActiveFrame) {
         if (!bad_frame)
-            erased_frames = 0;
-        else if(erased_frames != 3)
-            erased_frames++;
+            p->erased_frames = 0;
+        else if(p->erased_frames != 3)
+            p->erased_frames++;
 
         inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, bad_frame);
         lsp_interpolate(lpc, cur_lsp, p->prev_lsp);
@@ -723,7 +725,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         // Generate the excitation for the frame
         memcpy(excitation, p->prev_excitation, PITCH_MAX * sizeof(int16_t));
         vector_ptr = excitation + PITCH_MAX;
-        if (!erased_frames) {
+        if (!p->erased_frames) {
             // Update interpolation gain memory
             p->interp_gain = fixed_cb_gain[(p->subframe[2].amp_index +
                                         p->subframe[3].amp_index) >> 1];
@@ -749,7 +751,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             vector_ptr = excitation + PITCH_MAX;
 
             for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
-                comp_ppf_coeff(vector_ptr + i, p->pitch_lag[i >> 1],
+                comp_ppf_coeff(vector_ptr + i, p->pitch_lag[j >> 1],
                                ppf + j, p->cur_rate);
 
             // Restore the original excitation
@@ -764,7 +766,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                              1 << 14, 15, SUBFRAME_LEN);
         } else {
             p->interp_gain = (p->interp_gain * 3 + 2) >> 2;
-            if (erased_frames == 3) {
+            if (p->erased_frames == 3) {
                 // Mute output
                 memset(excitation, 0, (FRAME_LEN + PITCH_MAX) * sizeof(int16_t));
                 memset(out, 0, FRAME_LEN * sizeof(int16_t));
