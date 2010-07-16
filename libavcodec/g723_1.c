@@ -759,7 +759,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             memcpy(vector_ptr, out, FRAME_LEN * sizeof(int16_t));
 
             // Peform pitch postfiltering
-            for (i = 0, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
+            for (i = LPC_ORDER, j = 0; i < FRAME_LEN; i += SUBFRAME_LEN, j++)
                 ff_acelp_weighted_vector_sum(out + i, vector_ptr + i,
                                              vector_ptr + i + ppf[j].index,
                                              ppf[j].sc_gain, ppf[j].opt_gain,
@@ -769,10 +769,10 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
             if (p->erased_frames == 3) {
                 // Mute output
                 memset(excitation, 0, (FRAME_LEN + PITCH_MAX) * sizeof(int16_t));
-                memset(out, 0, FRAME_LEN * sizeof(int16_t));
+                memset(out, 0, (FRAME_LEN + LPC_ORDER) * sizeof(int16_t));
             } else {
                 // Regenerate frame
-                residual_interp(excitation, out, p->interp_index,
+                residual_interp(excitation, out + LPC_ORDER, p->interp_index,
                                 p->interp_gain, &p->random_seed);
             }
         }
