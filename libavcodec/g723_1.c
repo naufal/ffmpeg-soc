@@ -23,6 +23,10 @@ typedef struct g723_1_context {
     int16_t interp_gain;
     int16_t sid_gain;
     int16_t cur_gain;
+
+    int16_t reflection_coef;
+    int16_t pf_fir_mem[LPC_ORDER];   ///< Formant FIR postfilter memory
+    int     pf_iir_mem[LPC_ORDER];   ///< Formant IIR postfilter memory
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -686,6 +690,93 @@ static void residual_interp(int16_t *buf, int16_t *out, int16_t lag,
     }
 }
 
+/*
+ * @param filter_coef filter coefficients vector
+ * @param src input signal vector
+ * @param dest output filtered vector
+ */
+static void iir_filter(int16_t filter_coef[][LPC_ORDER], int16_t *src,
+                       int *dest)
+{
+    int i, j;
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t filter = 0;
+
+        for (j = 1; j <= LPC_ORDER; j++) {
+            filter -= filter_coef[0][j - 1] * src[i - j] -
+                      filter_coef[1][j - 1] * (dest[i - j] >> 16);
+        }
+
+        dest[i] = av_clipl_int32((src[i] << 16) + (filter << 3) + (1 << 15));
+    }
+}
+
+/*
+ * @param buf synthesized speech vector
+ * @param lpc quantized lpc coefficients
+ */
+static int formant_postfilter(G723_1_Context *p, int16_t *buf, int16_t *lpc)
+{
+    int16_t filter_coef[2][LPC_ORDER];
+    int filter_signal[LPC_ORDER+SUBFRAME_LEN];
+    int16_t temp_vector[SUBFRAME_LEN];
+    int auto_corr[2];
+    int16_t temp;
+    int scale, energy;
+    int i;
+
+    // Compute FIR and IIR filter coefficients
+    for (i=0; i<LPC_ORDER; i++) {
+        filter_coef[0][i] = (-lpc[i] * postfilter_tbl[0][i] + (1<<14)) >> 15;
+        filter_coef[1][i] = (-lpc[i] * postfilter_tbl[1][i] + (1<<14)) >> 15;
+    }
+
+    // Normalize
+    memcpy(temp_vector, buf, SUBFRAME_LEN * sizeof(int16_t));
+    scale = scale_vector(temp_vector, SUBFRAME_LEN);
+
+    // Compute auto correlation coefficients
+    auto_corr[0] = dot_product(temp_vector, temp_vector + 1, SUBFRAME_LEN - 1);
+    auto_corr[1] = dot_product(temp_vector, temp_vector, SUBFRAME_LEN);
+
+    // Compute normalized signal energy
+    temp = 2 * scale + 4;
+    if (temp < 0)
+        energy = av_clipl_int32((int64_t)auto_corr[1] << -temp);
+    else
+        energy = auto_corr[1] >> temp;
+
+    // Compute reflection coefficient
+    temp = auto_corr[1] >> 16;
+    if (temp) {
+        temp = (auto_corr[0]>>2) / temp;
+    }
+
+    p->reflection_coef = ((p->reflection_coef << 2) - p->reflection_coef +
+                           temp + 2) >> 2;
+
+    memcpy(buf - LPC_ORDER, p->pf_fir_mem, LPC_ORDER * sizeof(int16_t));
+    memcpy(filter_signal, p->pf_iir_mem, LPC_ORDER * sizeof(int));
+
+    iir_filter(filter_coef, buf, filter_signal + LPC_ORDER);
+
+    memcpy(p->pf_fir_mem, buf + SUBFRAME_LEN - LPC_ORDER, LPC_ORDER *
+           sizeof(int16_t));
+    memcpy(p->pf_iir_mem, filter_signal + SUBFRAME_LEN, LPC_ORDER *
+           sizeof(int));
+
+    // Compensation filter
+    temp = (p->reflection_coef * 0xffffc000 >> 15) & 0xfffc;
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        buf[i] = av_clipl_int32(filter_signal[LPC_ORDER + i] +
+                                (((filter_signal[LPC_ORDER + i - 1] >> 16) *
+                                  temp) << 1)) >> 16;
+    }
+
+    return energy;
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                int *data_size, AVPacket *avpkt)
 {
@@ -700,6 +791,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
     int16_t excitation[FRAME_LEN + PITCH_MAX];
     int16_t acb_vector[SUBFRAME_LEN];
     int16_t *vector_ptr;
+    int energy;
     int bad_frame = 0, i, j;
 
     if (!buf_size || buf_size < frame_size[buf[0] & 3]) {
@@ -794,6 +886,8 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
         // Store the last 10 values of the output vector
         memcpy(p->filter_mem, vector_ptr + SUBFRAME_LEN - LPC_ORDER,
                LPC_ORDER * sizeof(int16_t));
+        energy = formant_postfilter(p, vector_ptr,
+                                    &lpc[i * (LPC_ORDER + 1) + 1]);
 
         vector_ptr += SUBFRAME_LEN;
     }
