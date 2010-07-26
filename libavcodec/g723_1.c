@@ -207,7 +207,7 @@ static int16_t normalize_bits_int32(int x)
 
 static int16_t scale_vector(int16_t *vector, int16_t length)
 {
-    int16_t scale, max = 0;
+    int16_t bits, scale, max = 0;
     int i;
 
     const int16_t shift_table[16] = {
@@ -220,12 +220,13 @@ static int16_t scale_vector(int16_t *vector, int16_t length)
         max = FFMAX(v, max);
     }
 
-    scale = shift_table[normalize_bits_int16(max)];
+    bits  = normalize_bits_int16(max);
+    scale = shift_table[bits];
 
     for (i = 0; i < length; i++)
         vector[i] = (int16_t)(av_clipl_int32(vector[i] * scale << 1) >> 4);
 
-    return scale - 3;
+    return bits - 3;
 }
 
 /*
