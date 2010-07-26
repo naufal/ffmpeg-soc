@@ -27,6 +27,8 @@ typedef struct g723_1_context {
     int16_t reflection_coef;
     int16_t pf_fir_mem[LPC_ORDER];   ///< Formant FIR postfilter memory
     int     pf_iir_mem[LPC_ORDER];   ///< Formant IIR postfilter memory
+    int16_t pf_gain;                 ///< Formant postfilter
+                                     ///< gain scaling unit memory
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -38,6 +40,7 @@ static av_cold int g723_1_decode_init(AVCodecContext *avctx)
     avctx->sample_rate = 8000;
 
     memcpy(p->prev_lsp, dc_lsp, LPC_ORDER * sizeof(int16_t));
+    p->pf_gain = 1 << 12;
 
     return 0;
 }
@@ -777,6 +780,47 @@ static int formant_postfilter(G723_1_Context *p, int16_t *buf, int16_t *lpc)
     return energy;
 }
 
+/*
+ * Adjust gain of postfiltered signal.
+ *
+ * @param buf postfiltered output vector
+ * @param energy input energy coefficient
+ */
+static void gain_scale(G723_1_Context *p, int16_t * buf, int energy)
+{
+    int num, denom, gain, bits1, bits2;
+    int temp, i;
+
+    num   = energy;
+    denom = 0;
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        temp  = av_clipl_int32((int64_t)(buf[i] >> 2) * (buf[i] >> 2) << 1);
+        denom = av_clipl_int32((int64_t)denom + temp);
+    }
+
+    if (num && denom) {
+        bits1 =   normalize_bits_int32(num);
+        bits2 =   normalize_bits_int32(denom);
+        num   =   num << bits1 >> 1;
+        denom <<= bits2;
+
+        bits2 = 5 + bits1 - bits2;
+        bits2 = FFMAX(0, bits2);
+
+        gain = (num >> 1) / (denom >> 16);
+        gain = gain << 16 >> bits2;
+        gain = ff_sqrt(gain >> 1);
+    } else {
+        gain = 1 << 12;
+    }
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        p->pf_gain = ((p->pf_gain << 4) - p->pf_gain + gain + (1 << 3)) >> 4;
+        buf[i]     = av_clip_int16((buf[i] * (p->pf_gain + (p->pf_gain >> 4)) +
+                                (1 << 10)) >> 11);
+    }
+}
+
 static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                                int *data_size, AVPacket *avpkt)
 {
@@ -888,6 +932,7 @@ static int g723_1_decode_frame(AVCodecContext *avctx, void *data,
                LPC_ORDER * sizeof(int16_t));
         energy = formant_postfilter(p, vector_ptr,
                                     &lpc[i * (LPC_ORDER + 1) + 1]);
+        gain_scale(p, vector_ptr, energy);
 
         vector_ptr += SUBFRAME_LEN;
     }
