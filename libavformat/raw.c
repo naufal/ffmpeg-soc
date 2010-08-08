@@ -871,7 +871,7 @@ AVOutputFormat eac3_muxer = {
 };
 #endif
 
-#if CONFIG_G723_1_DEMUXER
+#if 0 //CONFIG_G723_1_DEMUXER
 AVInputFormat g723_1_demuxer = {
     "g723_1",
     NULL_IF_CONFIG_SMALL("raw G723.1"),
