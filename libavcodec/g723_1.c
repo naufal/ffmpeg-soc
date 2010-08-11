@@ -1366,7 +1366,8 @@ static void lsp_quantize(int16_t *lsp, int16_t *prev_lsp, uint8_t *lsp_index)
 
     /* Calculate the VQ weighting vector */
     weight[0] = (1 << 20) / (lsp[1] - lsp[0]);
-    weight[LPC_ORDER - 1] = (1 << 20) / (lsp[LPC_ORDER - 1] - lsp[LPC_ORDER - 2]);
+    weight[LPC_ORDER - 1] = (1 << 20) / (lsp[LPC_ORDER - 1] -
+                            lsp[LPC_ORDER - 2]);
 
     for (i = 1; i < LPC_ORDER - 1; i++) {
         min  = FFMIN(lsp[i] - lsp[i - 1], lsp[i + 1] - lsp[i]);
