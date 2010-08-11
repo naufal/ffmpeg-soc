@@ -210,13 +210,14 @@ static inline int16_t prand(int16_t *rseed)
     return *rseed;
 }
 
-static inline int dot_product(const int16_t *v1, const int16_t *v2, int length)
+static inline int dot_product(const int16_t *v1, const int16_t *v2,
+                              int length, int shift)
 {
     int i, sum = 0;
     int64_t prod;
 
     for (i = 0; i < length; i++) {
-        prod = av_clipl_int32((int64_t)v1[i] * v2[i] << 1);
+        prod = av_clipl_int32((int64_t)v1[i] * v2[i] << shift);
         sum  = av_clipl_int32(sum + prod);
     }
     return sum;
@@ -539,7 +540,7 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
     /* Calculate adaptive vector */
     cb_ptr += subfrm.ad_cb_gain * 20;
     for (i = 0; i < SUBFRAME_LEN; i++) {
-        sum = dot_product(residual + i, cb_ptr, PITCH_ORDER);
+        sum = dot_product(residual + i, cb_ptr, PITCH_ORDER, 1);
         vector[i] = av_clipl_int32((sum << 1) + (1 << 15)) >> 16;
     }
 }
@@ -561,7 +562,7 @@ static int16_t autocorr_max(G723_1_Context *p, int offset, int *ccr_max,
     limit     = FFMIN(FRAME_LEN + PITCH_MAX - offset - length, pitch_lag + 3);
 
     for (i = pitch_lag - 3; i <= limit; i++) {
-        ccr = dot_product(buf, buf + i, length);
+        ccr = dot_product(buf, buf + i, length, 1);
 
         if (ccr > *ccr_max) {
             *ccr_max = ccr;
@@ -587,7 +588,7 @@ static int16_t autocorr_max_inv(G723_1_Context *p, int offset, int *ccr_max,
     pitch_lag = FFMIN(PITCH_MAX - 3, pitch_lag);
 
     for (i = pitch_lag - 3; i <= pitch_lag + 3; i++) {
-        ccr = dot_product(buf, buf - i, length);
+        ccr = dot_product(buf, buf - i, length, 1);
 
         if (ccr > *ccr_max) {
             *ccr_max = ccr;
@@ -683,15 +684,15 @@ static void comp_ppf_coeff(G723_1_Context *p, int offset, int16_t pitch_lag,
         return;
 
     /* Compute target energy */
-    energy[0] = dot_product(buf, buf, SUBFRAME_LEN);
+    energy[0] = dot_product(buf, buf, SUBFRAME_LEN, 1);
 
     /* Compute forward residual energy */
     if (fwd_lag)
-        energy[2] = dot_product(buf + fwd_lag, buf + fwd_lag, SUBFRAME_LEN);
+        energy[2] = dot_product(buf + fwd_lag, buf + fwd_lag, SUBFRAME_LEN, 1);
 
     /* Compute backward residual energy */
     if (back_lag)
-        energy[4] = dot_product(buf - back_lag, buf - back_lag, SUBFRAME_LEN);
+        energy[4] = dot_product(buf - back_lag, buf - back_lag, SUBFRAME_LEN, 1);
 
     /* Normalize and shorten */
     temp1 = 0;
@@ -749,7 +750,7 @@ static int16_t comp_interp_index(G723_1_Context *p, int16_t pitch_lag,
     ccr   = av_clipl_int32((int64_t)ccr + (1 << 15)) >> 16;
 
     /* Compute target energy */
-    tgt_eng  = dot_product(buf, buf, SUBFRAME_LEN * 2);
+    tgt_eng  = dot_product(buf, buf, SUBFRAME_LEN * 2, 1);
     *exc_eng = av_clipl_int32(tgt_eng + (1 << 15)) >> 16;
 
     if (ccr <= 0)
@@ -757,7 +758,7 @@ static int16_t comp_interp_index(G723_1_Context *p, int16_t pitch_lag,
 
     /* Compute best energy */
     best_eng = dot_product(buf - index, buf - index,
-                           SUBFRAME_LEN * 2);
+                           SUBFRAME_LEN * 2, 1);
     best_eng = av_clipl_int32((int64_t)best_eng + (1 << 15)) >> 16;
 
     temp = best_eng * *exc_eng >> 3;
@@ -845,8 +846,8 @@ static int tilt_compensation(G723_1_Context *p, int16_t *buf, int *filter_signal
     scale = scale_vector(temp_vector, SUBFRAME_LEN);
 
     /* Compute auto correlation coefficients */
-    auto_corr[0] = dot_product(temp_vector, temp_vector + 1, SUBFRAME_LEN - 1);
-    auto_corr[1] = dot_product(temp_vector, temp_vector, SUBFRAME_LEN);
+    auto_corr[0] = dot_product(temp_vector, temp_vector + 1, SUBFRAME_LEN - 1, 1);
+    auto_corr[1] = dot_product(temp_vector, temp_vector, SUBFRAME_LEN, 1);
 
     /* Compute normalized signal energy */
     temp = 2 * scale + 4;
