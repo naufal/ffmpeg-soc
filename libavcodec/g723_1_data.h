@@ -41,6 +41,7 @@
 #define GRID_SIZE    2
 #define PULSE_MAX    6
 #define GAIN_LEVELS  24
+#define COS_TBL_SIZE 512
 
 /**
  * G723.1 frame types
@@ -104,7 +105,7 @@ static const int16_t dc_lsp[LPC_ORDER] = {
 /**
  * Cosine table scaled by 2^14
  */
-static const int16_t cos_tab[512] = {
+static const int16_t cos_tab[COS_TBL_SIZE] = {
     16384,  16383,  16379,  16373,  16364,  16353,  16340,  16324,
     16305,  16284,  16261,  16235,  16207,  16176,  16143,  16107,
     16069,  16029,  15986,  15941,  15893,  15843,  15791,  15736,
@@ -1276,4 +1277,11 @@ static const int16_t hamming_window[LPC_FRAME] = {
  */
 static const int16_t binomial_window[LPC_ORDER] = {
     32749, 32695, 32604, 32477, 32315, 32118, 31887, 31622, 31324, 30995
+};
+
+/**
+ * 0.994^i scaled by 2^15
+ */
+static const int16_t bandwidth_expand[LPC_ORDER] = {
+    32571, 32376, 32182, 31989, 31797, 31606, 31416, 31228, 31040, 30854
 };
