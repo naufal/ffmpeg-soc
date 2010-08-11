@@ -1075,3 +1075,71 @@ AVCodec g723_1_decoder = {
     .long_name      = NULL_IF_CONFIG_SMALL("G.723.1"),
     .capabilities   = CODEC_CAP_SUBFRAMES,
 };
+
+#if CONFIG_G723_1_ENCODER
+static av_cold int g723_1_encode_init(AVCodecContext *avctx)
+{
+    G723_1_Context *p = avctx->priv_data;
+
+    if (avctx->sample_rate != 8000) {
+        av_log(avctx, AV_LOG_ERROR, "Only 8000Hz sample rate supported\n");
+        return -1;
+    }
+
+    if (avctx->channels != 1) {
+        av_log(avctx, AV_LOG_ERROR, "Only mono supported\n");
+        return -1;
+    }
+
+    if (avctx->bit_rate == 6300) {
+        p->cur_rate = Rate6k3;
+    } else if (avctx->bit_rate == 5300) {
+        p->cur_rate = Rate5k3;
+    } else {
+        av_log(avctx, AV_LOG_ERROR,
+               "Bitrate not supported, use either 5.3k or 6.3k\n");
+        return -1;
+    }
+    avctx->frame_size = 240;
+
+    return 0;
+}
+
+/**
+ * Remove DC component from the input signal.
+ *
+ * @param buf input signal
+ * @param fir zero memory
+ * @param iir pole memory
+ */
+static void highpass_filter(int16_t *buf, int16_t *fir, int *iir)
+{
+    int i;
+    for (i = 0; i < FRAME_LEN; i++) {
+        *iir   = (buf[i] << 15) + ((-*fir) << 15) + MULL2(*iir, 0x7f00);
+        *fir   = buf[i];
+        buf[i] = av_clipl_int32((int64_t)*iir + (1 << 15)) >> 16;
+    }
+}
+
+static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
+                               int buf_size, void *data)
+{
+    G723_1_Context *p = avctx->priv_data;
+
+    highpass_filter(data, &p->fir_mem[0], &p->iir_mem[0]);
+    return 0;
+}
+
+AVCodec g723_1_encoder = {
+    .name           = "g723_1",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = CODEC_ID_G723_1,
+    .priv_data_size = sizeof(G723_1_Context),
+    .init           = g723_1_encode_init,
+    .encode         = g723_1_encode_frame,
+    .long_name      = NULL_IF_CONFIG_SMALL("G.723.1"),
+    .sample_fmts    = (const enum SampleFormat[]){SAMPLE_FMT_S16,
+                                                  SAMPLE_FMT_NONE},
+};
+#endif
