@@ -1236,14 +1236,178 @@ static void comp_lpc_coeff(int16_t *buf, int16_t *prev_data, int16_t *lpc)
     }
 }
 
+static void lpc2lsp(int16_t *lpc, int16_t *prev_lsp, int16_t *lsp)
+{
+    int f[LPC_ORDER + 2]; ///< coefficients of the sum and difference
+                          ///< polynomials (F1, F2) ordered as
+                          ///< f1[0], f2[0], ...., f1[5], f2[5]
+
+    int max, shift, cur_val, prev_val, p, count = 0;
+    int i, j;
+    int64_t temp;
+
+    /* Initialize f1[0] and f2[0] to 1 in Q25 */
+    for (i = 0; i < LPC_ORDER; i++)
+        lsp[i] = (lpc[i] * bandwidth_expand[i] + (1 << 14)) >> 15;
+
+    /* Apply bandwidth expansion on the LPC coefficients */
+    f[0] = f[1] = 1 << 25;
+
+    /* Compute the remaining coefficients */
+    for (i = 0; i < LPC_ORDER / 2; i++) {
+        /* f1 */
+        f[2 * i + 2] = -f[2 * i] - ((lsp[i] + lsp[LPC_ORDER - 1 - i]) << 12);
+        /* f2 */
+        f[2 * i + 3] = f[2 * i + 1] - ((lsp[i] - lsp[LPC_ORDER - 1 - i]) << 12);
+    }
+
+    /* Divide f1[5] and f2[5] by 2 for use in polynomial evaluation */
+    f[LPC_ORDER] >>= 1;
+    f[LPC_ORDER + 1] >>= 1;
+
+    /* Normalize and shorten */
+    max = FFABS(f[0]);
+    for (i = 1; i < LPC_ORDER + 2; i++)
+        max = FFMAX(max, FFABS(f[i]));
+
+    shift = normalize_bits_int32(max);
+
+    for (i = 0; i < LPC_ORDER + 2; i++)
+        f[i] = av_clipl_int32((int64_t)(f[i] << shift) + (1 << 15)) >> 16;
+
+    /**
+     * Evaluate F1 and F2 at uniform intervals of pi/256 along the
+     * unit circle and check for zero crossings.
+     */
+    p = 0;
+    temp = 0;
+    for (i = 0; i <= LPC_ORDER / 2; i++)
+        temp += f[2 * i] * cos_tab[0];
+    prev_val = av_clipl_int32(temp << 1);
+
+    for ( i = 1; i < COS_TBL_SIZE / 2; i++) {
+        /* Evaluate */
+        temp = 0;
+        for (j = 0; j <= LPC_ORDER / 2; j++)
+            temp += f[LPC_ORDER - 2 * j + p] * cos_tab[i * j % COS_TBL_SIZE];
+        cur_val = av_clipl_int32(temp << 1);
+
+        /* Check for sign change, indicating a zero crossing */
+        if ((cur_val ^ prev_val) < 0) {
+
+            int abs_cur  = FFABS(cur_val);
+            int abs_prev = FFABS(prev_val);
+            int sum      = abs_cur + abs_prev;
+
+            shift = normalize_bits_int32(sum);
+
+            sum          <<= shift;
+            abs_prev     =   abs_prev << shift >> 8;
+            lsp[count++] =   ((i - 1) << 7) + (abs_prev >> 1) / (sum >> 16);
+
+            if (count == LPC_ORDER)
+                break;
+
+            /* Switch between sum and difference polynomials */
+            p ^= 1;
+
+            /* Evaluate */
+            temp = 0;
+            for (j = 0; j <= LPC_ORDER / 2; j++){
+                temp += f[LPC_ORDER - 2 * j + p] *
+                        cos_tab[i * j % COS_TBL_SIZE];
+            }
+            cur_val = av_clipl_int32(temp << 1);
+        }
+        prev_val = cur_val;
+    }
+
+    if (count != LPC_ORDER)
+        memcpy(lsp, prev_lsp, LPC_ORDER * sizeof(int16_t));
+}
+
+/**
+ * Quantize the current LSP subvector.
+ *
+ * @param num    band number
+ * @param offset offset of the current subvector in an LPC_ORDER vector
+ * @param size   size of the current subvector
+ */
+#define get_index(num, offset, size) \
+{\
+    int error, max = -1;\
+    int16_t temp[4];\
+    int i, j;\
+    for (i = 0; i < LSP_CB_SIZE; i++) {\
+        for (j = 0; j < size; j++){\
+            temp[j] = (weight[j + offset] * lsp_band##num[i][j] +\
+                      (1 << 14)) >> 15;\
+        }\
+        error =  (dot_product(lsp + offset, temp, size, 1) << 1) -\
+                 dot_product(lsp_band##num[i], temp, size, 1);\
+        if (error > max) {\
+            max = error;\
+            lsp_index[num] = i;\
+        }\
+    }\
+}
+
+/**
+ * Vector quantize the LSP frequencies.
+ *
+ * @param lsp      the current lsp vector
+ * @param prev_lsp the previous lsp vector
+ */
+static void lsp_quantize(int16_t *lsp, int16_t *prev_lsp, uint8_t *lsp_index)
+{
+    int16_t weight[LPC_ORDER];
+    int16_t min, max;
+    int shift, i;
+
+    /* Calculate the VQ weighting vector */
+    weight[0] = (1 << 20) / (lsp[1] - lsp[0]);
+    weight[LPC_ORDER - 1] = (1 << 20) / (lsp[LPC_ORDER - 1] - lsp[LPC_ORDER - 2]);
+
+    for (i = 1; i < LPC_ORDER - 1; i++) {
+        min  = FFMIN(lsp[i] - lsp[i - 1], lsp[i + 1] - lsp[i]);
+        if (min > 0x20)
+            weight[i] = (1 << 20) / min;
+        else
+            weight[i] = INT16_MAX;
+    }
+
+    /* Normalize */
+    max = 0;
+    for (i = 0; i < LPC_ORDER; i++)
+        max = FFMAX(weight[i], max);
+
+    shift = normalize_bits_int16(max);
+    for (i = 0; i < LPC_ORDER; i++) {
+        weight[i] <<= shift;
+    }
+
+    /* Compute the VQ target vector */
+    for (i = 0; i < LPC_ORDER; i++) {
+        lsp[i] -= dc_lsp[i] +
+                  (((prev_lsp[i] - dc_lsp[i]) * 12288 + (1 << 14)) >> 15);
+    }
+
+    get_index(0, 0, 3);
+    get_index(1, 3, 3);
+    get_index(2, 6, 4);
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
     G723_1_Context *p = avctx->priv_data;
     int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
+    int16_t cur_lsp[LPC_ORDER];
 
     highpass_filter(data, &p->fir_mem[0], &p->iir_mem[0]);
     comp_lpc_coeff(data, p->prev_data, unq_lpc);
+    lpc2lsp(&unq_lpc[LPC_ORDER * 3], p->prev_lsp, cur_lsp);
+    lsp_quantize(cur_lsp, p->prev_lsp, p->lsp_index);
     return 0;
 }
 
