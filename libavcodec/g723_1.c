@@ -57,6 +57,7 @@ typedef struct g723_1_context {
     int     iir_mem[LPC_ORDER];
     int16_t pf_gain;             ///< formant postfilter
                                  ///< gain scaling unit memory
+    int16_t prev_data[HALF_FRAME_LEN];
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -1122,12 +1123,127 @@ static void highpass_filter(int16_t *buf, int16_t *fir, int *iir)
     }
 }
 
+/**
+ * Estimate autocorrelation of the input vector.
+ *
+ * @param buf      input buffer
+ * @param autocorr autocorrelation coefficients vector
+ */
+static void comp_autocorr(int16_t *buf, int16_t *autocorr)
+{
+    int i, scale, temp;
+    int16_t vector[LPC_FRAME];
+
+    memcpy(vector, buf, LPC_FRAME * sizeof(int16_t));
+    scale_vector(vector, LPC_FRAME);
+
+    /* Apply the Hamming window */
+    for (i = 0; i < LPC_FRAME; i++)
+        vector[i] = (vector[i] * hamming_window[i] + (1 << 14)) >> 15;
+
+    /* Compute the first autocorrelation coefficient */
+    temp = dot_product(vector, vector, LPC_FRAME, 0);
+
+    /* Apply a white noise correlation factor of (1025/1024) */
+    temp += temp >> 10;
+
+    /* Normalize */
+    scale = normalize_bits_int32(temp);
+    autocorr[0] = av_clipl_int32((int64_t)(temp << scale) +
+                                 (1 << 15)) >> 16;
+
+    /* Compute the remaining coefficients */
+    if (!autocorr[0]) {
+        memset(autocorr + 1, 0, LPC_ORDER * sizeof(int16_t));
+    } else {
+        for (i = 1; i <= LPC_ORDER; i++) {
+           temp = dot_product(vector, vector + i, LPC_FRAME - i, 0);
+           temp = MULL2((temp << scale), binomial_window[i - 1]);
+           autocorr[i] = av_clipl_int32((int64_t)temp + (1 << 15)) >> 16;
+        }
+    }
+}
+
+/**
+ * Use Levinson-Durbin recursion to compute LPC coefficients from
+ * autocorrelation values.
+ *
+ * @param lpc      LPC coefficients vector
+ * @param autocorr autocorrelation coefficients vector
+ * @param error    prediction error
+ */
+static void levinson_durbin(int16_t *lpc, int16_t *autocorr, int16_t error)
+{
+    int16_t vector[LPC_ORDER];
+    int16_t partial_corr;
+    int i, j, temp;
+
+    memset(lpc, 0, LPC_ORDER * sizeof(int16_t));
+
+    for (i = 0; i < LPC_ORDER; i++) {
+        /* Compute the partial correlation coefficient */
+        temp = 0;
+        for (j = 0; j < i; j++)
+            temp -= lpc[j] * autocorr[i - j - 1];
+        temp = ((autocorr[i] << 13) + temp) << 3;
+
+        if (FFABS(temp) >= (error << 16))
+            break;
+
+        partial_corr = temp / (error << 1);
+
+        lpc[i] = av_clipl_int32((int64_t)(partial_corr << 14) +
+                                (1 << 15)) >> 16;
+
+        /* Update the prediction error */
+        temp  = MULL2(temp, partial_corr);
+        error = av_clipl_int32((int64_t)(error << 16) - temp +
+                                (1 << 15)) >> 16;
+
+        memcpy(vector, lpc, i * sizeof(int16_t));
+        for (j = 0; j < i; j++) {
+            temp = partial_corr * vector[i - j - 1] << 1;
+            lpc[j] = av_clipl_int32((int64_t)(lpc[j] << 16) - temp +
+                                    (1 << 15)) >> 16;
+        }
+    }
+}
+
+/**
+ * Calculate LPC coefficients for the current frame.
+ *
+ * @param buf       current frame
+ * @param prev_data 2 trailing subframes of the previous frame
+ * @param lpc       LPC coefficients vector
+ */
+static void comp_lpc_coeff(int16_t *buf, int16_t *prev_data, int16_t *lpc)
+{
+    int16_t vector[FRAME_LEN + HALF_FRAME_LEN];
+    int16_t autocorr[(LPC_ORDER + 1) * SUBFRAMES];
+    int16_t *autocorr_ptr = autocorr;
+    int16_t *lpc_ptr      = lpc;
+    int i, j;
+
+    memcpy(vector, prev_data, HALF_FRAME_LEN * sizeof(int16_t));
+    memcpy(vector + HALF_FRAME_LEN, buf, FRAME_LEN * sizeof(int16_t));
+
+    for (i = 0, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++) {
+        comp_autocorr(vector + i, autocorr_ptr);
+        levinson_durbin(lpc_ptr, autocorr_ptr + 1, autocorr_ptr[0]);
+
+        lpc_ptr += LPC_ORDER;
+        autocorr_ptr += LPC_ORDER + 1;
+    }
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
     G723_1_Context *p = avctx->priv_data;
+    int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
 
     highpass_filter(data, &p->fir_mem[0], &p->iir_mem[0]);
+    comp_lpc_coeff(data, p->prev_data, unq_lpc);
     return 0;
 }
 
