@@ -1084,12 +1084,12 @@ static av_cold int g723_1_encode_init(AVCodecContext *avctx)
 
     if (avctx->sample_rate != 8000) {
         av_log(avctx, AV_LOG_ERROR, "Only 8000Hz sample rate supported\n");
-        return -1;
+        return AVERROR(EINVAL);
     }
 
     if (avctx->channels != 1) {
         av_log(avctx, AV_LOG_ERROR, "Only mono supported\n");
-        return -1;
+        return AVERROR(EINVAL);
     }
 
     if (avctx->bit_rate == 6300) {
@@ -1099,7 +1099,7 @@ static av_cold int g723_1_encode_init(AVCodecContext *avctx)
     } else {
         av_log(avctx, AV_LOG_ERROR,
                "Bitrate not supported, use either 5.3k or 6.3k\n");
-        return -1;
+        return AVERROR(EINVAL);
     }
     avctx->frame_size = 240;
 
