@@ -1436,6 +1436,7 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     G723_1_Context *p = avctx->priv_data;
     int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
+    int16_t weighted_lpc[LPC_ORDER * SUBFRAMES << 1];
     int16_t vector[FRAME_LEN + PITCH_MAX];
 
     int16_t *in = data;
