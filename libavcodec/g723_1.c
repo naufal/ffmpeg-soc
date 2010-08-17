@@ -801,31 +801,24 @@ static void residual_interp(int16_t *buf, int16_t *out, int16_t lag,
 /**
  * Perform IIR filtering.
  *
- * @param lpc  quantized lpc coefficients
- * @param src  input signal vectoq
- * aparam dest output filtered vector
+ * @param width width of the output buffer (0 - 16bits, 1 - 32bits)
  */
-static void iir_filter(int16_t *lpc, int16_t *src,
-                       int *dest)
-{
-    int16_t filter_coef[2][LPC_ORDER];
-    int64_t filter;
-    int i, j;
-
-    for (i = 0; i < LPC_ORDER; i++) {
-        filter_coef[0][i] = (-lpc[i] * postfilter_tbl[0][i] + (1 << 14)) >> 15;
-        filter_coef[1][i] = (-lpc[i] * postfilter_tbl[1][i] + (1 << 14)) >> 15;
-    }
-
-    for (i = 0; i < SUBFRAME_LEN; i++) {
-        filter = 0;
-        for (j = 1; j <= LPC_ORDER; j++) {
-            filter -= filter_coef[0][j - 1] * src[i - j] -
-                      filter_coef[1][j - 1] * (dest[i - j] >> 16);
-        }
-
-        dest[i] = av_clipl_int32((src[i] << 16) + (filter << 3) + (1 << 15));
-    }
+#define iir_filter(fir_coef, iir_coef, src, dest, width)\
+{\
+    int m, n;\
+    int res_shift = 16 & ~-(width);\
+    int in_shift  = 16 - res_shift;\
+\
+    for (m = 0; m < SUBFRAME_LEN; m++) {\
+        int64_t filter = 0;\
+        for (n = 1; n <= LPC_ORDER; n++) {\
+            filter -= (fir_coef)[n - 1] * (src)[m - n] -\
+                      (iir_coef)[n - 1] * ((dest)[m - n] >> in_shift);\
+        }\
+\
+        (dest)[m] = av_clipl_int32(((src)[m] << 16) + (filter << 3) +\
+                                   (1 << 15)) >> res_shift;\
+    }\
 }
 
 /**
@@ -925,13 +918,22 @@ static void gain_scale(G723_1_Context *p, int16_t * buf, int energy)
 static void formant_postfilter(G723_1_Context *p, int16_t *lpc, int16_t *buf)
 {
     int filter_signal[LPC_ORDER + FRAME_LEN];
-    int energy, i, j;
+    int16_t filter_coef[2][LPC_ORDER];
+    int energy, i, j, k;
 
     memcpy(buf, p->fir_mem, LPC_ORDER * sizeof(int16_t));
     memcpy(filter_signal, p->iir_mem, LPC_ORDER * sizeof(int));
 
-    for (i = LPC_ORDER, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++)
-        iir_filter(&lpc[j * LPC_ORDER], buf + i, filter_signal + i);
+    for (i = LPC_ORDER, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++) {
+        for (k = 0; k < LPC_ORDER; k++) {
+            filter_coef[0][k] = (-lpc[k] * postfilter_tbl[0][k] +
+                                 (1 << 14)) >> 15;
+            filter_coef[1][k] = (-lpc[k] * postfilter_tbl[1][k] +
+                                 (1 << 14)) >> 15;
+        }
+        iir_filter(filter_coef[0], filter_coef[1], buf + i,
+                   filter_signal + i, 1);
+    }
 
     memcpy(p->fir_mem, buf + FRAME_LEN, LPC_ORDER * sizeof(int16_t));
     memcpy(p->iir_mem, filter_signal + FRAME_LEN, LPC_ORDER * sizeof(int));
