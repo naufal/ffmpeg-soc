@@ -1437,8 +1437,10 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
 
-    highpass_filter(data, &p->fir_mem[0], &p->iir_mem[0]);
-    comp_lpc_coeff(data, p->prev_data, unq_lpc);
+    int16_t *in = data;
+
+    highpass_filter(in, &p->fir_mem[0], &p->iir_mem[0]);
+    comp_lpc_coeff(in, p->prev_data, unq_lpc);
     lpc2lsp(&unq_lpc[LPC_ORDER * 3], p->prev_lsp, cur_lsp);
     lsp_quantize(cur_lsp, p->prev_lsp, p->lsp_index);
 
