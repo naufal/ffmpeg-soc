@@ -1642,6 +1642,11 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     for (i = 0, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++)
         harmonic_filter(hf + j, vector + PITCH_MAX + i, in + i);
 
+    inverse_quant(cur_lsp, p->prev_lsp, p->lsp_index, 0);
+    lsp_interpolate(qnt_lpc, cur_lsp, p->prev_lsp);
+
+    memcpy(p->prev_lsp, cur_lsp, sizeof(int16_t) * LPC_ORDER);
+
     return 0;
 }
 
