@@ -58,6 +58,7 @@ typedef struct g723_1_context {
     int16_t pf_gain;             ///< formant postfilter
                                  ///< gain scaling unit memory
     int16_t prev_data[HALF_FRAME_LEN];
+    int16_t prev_weight_sig[PITCH_MAX];
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -1430,6 +1431,78 @@ static void perceptual_filter(G723_1_Context *p, int16_t *flt_coef,
     memcpy(p->fir_mem, vector + FRAME_LEN, sizeof(int16_t) * LPC_ORDER);
 }
 
+/**
+ * Estimate the open loop pitch period.
+ *
+ * @param buf   perceptually weighted speech
+ * @param start estimation is carried out from this position
+ */
+static int estimate_pitch(int16_t *buf, int start)
+{
+    int max_exp = 32;
+    int max_ccr = 0x4000;
+    int max_eng = 0x7fff;
+    int index   = PITCH_MIN;
+    int offset  = start - PITCH_MIN + 1;
+
+    int ccr, eng, orig_eng, ccr_eng, exp;
+    int diff, temp;
+
+    int i;
+
+    orig_eng = dot_product(buf + offset, buf + offset, HALF_FRAME_LEN, 0);
+
+    for (i = PITCH_MIN; i <= PITCH_MAX - 3; i++) {
+        offset--;
+
+        /* Update energy and compute correlation */
+        orig_eng += buf[offset] * buf[offset] -
+                    buf[offset + HALF_FRAME_LEN] * buf[offset + HALF_FRAME_LEN];
+        ccr      =  dot_product(buf + start, buf + offset, HALF_FRAME_LEN, 0);
+        if (ccr <= 0)
+            continue;
+
+        /* Split into mantissa and exponent to maintain precision */
+        exp  =   normalize_bits_int32(ccr);
+        ccr  =   av_clipl_int32((int64_t)(ccr << exp) + (1 << 15)) >> 16;
+        exp  <<= 1;
+        ccr  *=  ccr;
+        temp =   normalize_bits_int32(ccr);
+        ccr  =   ccr << temp >> 16;
+        exp  +=  temp;
+
+        temp =   normalize_bits_int32(orig_eng);
+        eng  =   av_clipl_int32((int64_t)(orig_eng << temp) + (1 << 15)) >> 16;
+        exp  -=  temp;
+
+        if (ccr >= eng) {
+            exp--;
+            ccr >>= 1;
+        }
+        if (exp > max_exp)
+            continue;
+
+        if (exp + 1 < max_exp)
+            goto update;
+        
+        /* Equalize exponents before comparison */
+        if (exp + 1 == max_exp)
+            temp = max_ccr >> 1;
+        else
+            temp = max_ccr;
+        ccr_eng = ccr * max_eng;
+        diff    = ccr_eng - eng * temp;
+        if (diff > 0 && (i - index < PITCH_MIN || diff > ccr_eng >> 2)) {
+update:
+            index   = i;
+            max_exp = exp;
+            max_ccr = ccr;
+            max_eng = eng;
+        }
+    }
+    return index;
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
@@ -1456,6 +1529,15 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     memcpy(in, vector + LPC_ORDER, sizeof(int16_t) * FRAME_LEN);
 
     perceptual_filter(p, weighted_lpc, unq_lpc, vector);
+
+    memcpy(in, vector + LPC_ORDER, sizeof(int16_t) * FRAME_LEN);
+    memcpy(vector, p->prev_weight_sig, sizeof(int16_t) * PITCH_MAX);
+    memcpy(vector + PITCH_MAX, in, sizeof(int16_t) * FRAME_LEN);
+
+    scale_vector(vector, FRAME_LEN + PITCH_MAX);
+
+    p->pitch_lag[0] = estimate_pitch(vector, PITCH_MAX);
+    p->pitch_lag[1] = estimate_pitch(vector, PITCH_MAX + HALF_FRAME_LEN);
     return 0;
 }
 
