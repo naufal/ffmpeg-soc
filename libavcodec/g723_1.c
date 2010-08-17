@@ -59,6 +59,9 @@ typedef struct g723_1_context {
                                  ///< gain scaling unit memory
     int16_t prev_data[HALF_FRAME_LEN];
     int16_t prev_weight_sig[PITCH_MAX];
+
+    int16_t perf_fir_mem[LPC_ORDER];       ///< perceptual filter fir
+    int16_t perf_iir_mem[LPC_ORDER];       ///< and iir memories
 } G723_1_Context;
 
 static av_cold int g723_1_decode_init(AVCodecContext *avctx)
@@ -1594,6 +1597,63 @@ static void harmonic_filter(HFParam *hf, int16_t *src, int16_t *dest)
     }
 }
 
+/**
+ * Perform harmonic noise shaping.
+ *
+ * @param hf filter parameters
+ */
+static void harmonic_noise_sub(HFParam *hf, int16_t *src, int16_t *dest)
+{
+    int i;
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t temp = hf->gain * src[i - hf->index] << 1;
+        dest[i] = av_clipl_int32(((dest[i] - src[i]) << 16) - temp +
+                                 (1 << 15)) >> 16;
+    }
+}
+/**
+ * Combined synthesis and formant perceptual weighting filer.
+ *
+ * @param qnt_lpc  quantized lpc coefficients
+ * @param perf_lpc perceptual filter coefficients
+ * @param perf_fir perceptual filter fir memory
+ * @param perf_iir perceptual filter iir memory
+ * @param scale    the filter output will be scaled by 2^scale
+ */
+static void synth_percept_filter(int16_t *qnt_lpc, int16_t *perf_lpc,
+                                 int16_t *perf_fir, int16_t *perf_iir,
+                                 int16_t *src, int16_t *dest, int scale)
+{
+    int i, j;
+    int16_t buf_16[SUBFRAME_LEN + LPC_ORDER];
+    int buf[SUBFRAME_LEN];
+
+    int16_t *bptr_16 = buf_16 + LPC_ORDER;
+
+    memcpy(buf_16, perf_fir, sizeof(int16_t) * LPC_ORDER);
+    memcpy(dest - LPC_ORDER, perf_iir, sizeof(int16_t) * LPC_ORDER);
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t temp = 0;
+        for (j = 1; j <= LPC_ORDER; j++)
+            temp -= qnt_lpc[j - 1] * bptr_16[i - j];
+    
+        buf[i]    = (src[i] << 15) + (temp << 3);
+        bptr_16[i] = av_clipl_int32((int64_t)buf[i] + (1 << 15)) >> 16;
+    }
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t fir = 0, iir = 0;
+        for (j = 1; j <= LPC_ORDER; j++) {
+            fir -= perf_lpc[j - 1] * bptr_16[i - j];
+            iir += perf_lpc[j + LPC_ORDER - 1] * dest[i - j];
+        }
+        dest[i] = av_clipl_int32(((buf[i] + (fir << 3)) << scale) + (iir << 3) +
+                                 (1<<15)) >> 16;
+    }
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
@@ -1601,10 +1661,12 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     HFParam hf[4];
     int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
+    int16_t qnt_lpc[LPC_ORDER * SUBFRAMES];
     int16_t weighted_lpc[LPC_ORDER * SUBFRAMES << 1];
     int16_t vector[FRAME_LEN + PITCH_MAX];
 
     int16_t *in = data;
+    int offset = 0;
     int i, j;
 
     highpass_filter(in, &p->fir_mem[0], &p->iir_mem[0]);
@@ -1646,6 +1708,37 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     lsp_interpolate(qnt_lpc, cur_lsp, p->prev_lsp);
 
     memcpy(p->prev_lsp, cur_lsp, sizeof(int16_t) * LPC_ORDER);
+
+    offset = 0;
+    for (i = 0; i < SUBFRAMES; i++) {
+        int16_t impulse_resp[SUBFRAME_LEN];
+        int16_t flt_in[SUBFRAME_LEN];
+        int16_t zero[LPC_ORDER];
+
+        /**
+         * Compute the combined impulse response of the synthesis filter,
+         * formant perceptual weighting filter and harmonic noise shaping filter
+         */
+        memset(zero, 0, sizeof(int16_t) * LPC_ORDER);
+        memset(vector, 0, sizeof(int16_t) * PITCH_MAX);
+        memset(flt_in, 0, sizeof(int16_t) * SUBFRAME_LEN);
+
+        flt_in[0] = 1 << 13;  /* Unit impulse */
+        synth_percept_filter(qnt_lpc + offset, weighted_lpc + offset,
+                             zero, zero, flt_in, vector + PITCH_MAX, 1);
+        harmonic_filter(hf + i, vector + PITCH_MAX, impulse_resp);
+
+         /* Compute the combined zero input response */
+        memset(vector, 0, sizeof(int16_t) * PITCH_MAX);
+
+        synth_percept_filter(qnt_lpc + offset, weighted_lpc + offset,
+                             p->perf_fir_mem, p->perf_iir_mem,
+                             zero, vector + PITCH_MAX, 0);
+        harmonic_noise_sub(hf + i, vector + PITCH_MAX, in);
+
+        offset += LPC_ORDER;
+        in += SUBFRAME_LEN;
+    }
 
     return 0;
 }
