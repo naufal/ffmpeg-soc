@@ -1285,3 +1285,13 @@ static const int16_t binomial_window[LPC_ORDER] = {
 static const int16_t bandwidth_expand[LPC_ORDER] = {
     32571, 32376, 32182, 31989, 31797, 31606, 31416, 31228, 31040, 30854
 };
+
+/**
+ * 0.5^i scaled by 2^15
+ */
+static const int16_t percept_flt_tbl[2][LPC_ORDER] = {
+    /* Zero part */
+    {29491, 26542, 23888, 21499, 19349, 17414, 15673, 14106, 12695, 11425},
+    /* Pole part */
+    {16384,  8192,  4096,  2048,  1024,   512,   256,   128,    64,    32}
+};
