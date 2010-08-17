@@ -1402,7 +1402,7 @@ static void lsp_quantize(int16_t *lsp, int16_t *prev_lsp, uint8_t *lsp_index)
 }
 
 /**
- * Formant perceptual weighting filter.
+ * Apply the formant perceptual weighting filter.
  *
  * @param flt_coef filter coefficients
  * @param unq_lpc  unquantized lpc vector
@@ -1503,16 +1503,109 @@ update:
     return index;
 }
 
+/**
+ * Compute harmonic noise filter parameters.
+ *
+ * @param buf       perceptually weighted speech
+ * @param pitch_lag open loop pitch period
+ * @param hf        harmonic filter parameters
+ */
+static void comp_harmonic_coeff(int16_t *buf, int16_t pitch_lag, HFParam *hf)
+{
+    int ccr, eng, max_ccr, max_eng;
+    int exp, max, diff;
+    int energy[15];
+    int i, j;
+
+    for (i = 0, j = pitch_lag - 3; j <= pitch_lag + 3; i++, j++) {
+        /* Compute residual energy */
+        energy[i << 1] = dot_product(buf - j, buf - j, SUBFRAME_LEN, 0);
+        /* Compute correlation */
+        energy[(i << 1) + 1] = dot_product(buf, buf - j, SUBFRAME_LEN, 0);
+    }
+    
+    /* Compute target energy */
+    energy[14] = dot_product(buf, buf, SUBFRAME_LEN, 0);
+
+    /* Normalize */
+    max = 0;
+    for (i = 0; i < 15; i++)
+        max = FFMAX(max, FFABS(energy[i]));
+
+    exp = normalize_bits_int32(max);
+    for (i = 0; i < 15; i++) {
+        energy[i] = av_clipl_int32((int64_t)(energy[i] << exp) +
+                                   (1 << 15)) >> 16;
+    }
+
+    hf->index = -1;
+    hf->gain  =  0;
+    max_ccr   =  1;
+    max_eng   =  0x7fff;
+
+    /* Compute the coefficients */
+    for (i = 0; i <= 6; i++) {
+        eng = energy[i << 1];
+        ccr = energy[(i << 1) + 1];
+
+        if (ccr <= 0)
+            continue;
+
+        ccr = (ccr * ccr + (1 << 14)) >> 15;
+        diff = ccr * max_eng - eng * max_ccr;
+        if (diff > 0) {
+            max_ccr   = ccr;
+            max_eng   = eng;
+            hf->index = i;
+        }
+    }
+
+    if (hf->index == -1) {
+        hf->index = pitch_lag;
+        return;
+    }
+
+    eng = energy[14] * max_eng;
+    eng = (eng >> 2) + (eng >> 3);
+    ccr = energy[(hf->index << 1) + 1] * energy[(hf->index << 1) + 1];
+    if (eng < ccr) {
+        eng = energy[(hf->index << 1) + 1];
+
+        if (eng >= max_eng)
+            hf->gain = 0x2800;
+        else
+            hf->gain = ((eng << 15) / max_eng * 0x2800 + (1 << 14)) >> 15;
+    }
+    hf->index += pitch_lag - 3;
+}
+
+/**
+ * Apply the harmonic noise shaping filter.
+ *
+ * @param hf filter parameters
+ */ 
+static void harmonic_filter(HFParam *hf, int16_t *src, int16_t *dest)
+{
+    int i;
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t temp = hf->gain * src[i - hf->index] << 1;
+        dest[i] = av_clipl_int32((src[i] << 16) - temp + (1 << 15)) >> 16;
+    }
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
     G723_1_Context *p = avctx->priv_data;
+    HFParam hf[4];
     int16_t unq_lpc[LPC_ORDER * SUBFRAMES];
     int16_t cur_lsp[LPC_ORDER];
     int16_t weighted_lpc[LPC_ORDER * SUBFRAMES << 1];
     int16_t vector[FRAME_LEN + PITCH_MAX];
 
     int16_t *in = data;
+    int i, j;
 
     highpass_filter(in, &p->fir_mem[0], &p->iir_mem[0]);
     comp_lpc_coeff(in, p->prev_data, unq_lpc);
@@ -1538,6 +1631,17 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
 
     p->pitch_lag[0] = estimate_pitch(vector, PITCH_MAX);
     p->pitch_lag[1] = estimate_pitch(vector, PITCH_MAX + HALF_FRAME_LEN);
+
+    for (i = PITCH_MAX, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++)
+        comp_harmonic_coeff(vector + i, p->pitch_lag[j >> 1], hf + j);
+
+    memcpy(vector, p->prev_weight_sig, sizeof(int16_t) * PITCH_MAX);
+    memcpy(vector + PITCH_MAX, in, sizeof(int16_t) * FRAME_LEN);
+    memcpy(p->prev_weight_sig, vector + FRAME_LEN, sizeof(int16_t) * PITCH_MAX);
+
+    for (i = 0, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++)
+        harmonic_filter(hf + j, vector + PITCH_MAX + i, in + i);
+
     return 0;
 }
 

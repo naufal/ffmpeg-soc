@@ -82,6 +82,14 @@ typedef struct {
 } PPFParam;
 
 /**
+ * Harmonic filter parameters
+ */
+typedef struct {
+    int index;
+    int gain;
+} HFParam;
+
+/**
  * Postfilter gain weighting factors scaled by 2^15
  */
 static const int16_t ppf_gain_weight[2] = {0x1800, 0x2000};
