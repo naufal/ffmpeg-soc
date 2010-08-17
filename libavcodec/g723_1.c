@@ -1411,6 +1411,16 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     comp_lpc_coeff(data, p->prev_data, unq_lpc);
     lpc2lsp(&unq_lpc[LPC_ORDER * 3], p->prev_lsp, cur_lsp);
     lsp_quantize(cur_lsp, p->prev_lsp, p->lsp_index);
+
+    /* Update memory */
+    memcpy(vector + LPC_ORDER, p->prev_data + SUBFRAME_LEN,
+           sizeof(int16_t) * SUBFRAME_LEN);
+    memcpy(vector + LPC_ORDER + SUBFRAME_LEN, in,
+           sizeof(int16_t) * (HALF_FRAME_LEN + SUBFRAME_LEN));
+    memcpy(p->prev_data, in + HALF_FRAME_LEN,
+           sizeof(int16_t) * HALF_FRAME_LEN);
+    memcpy(in, vector + LPC_ORDER, sizeof(int16_t) * FRAME_LEN);
+
     return 0;
 }
 
