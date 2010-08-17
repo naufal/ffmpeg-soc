@@ -1400,6 +1400,36 @@ static void lsp_quantize(int16_t *lsp, int16_t *prev_lsp, uint8_t *lsp_index)
     get_index(2, 6, 4);
 }
 
+/**
+ * Formant perceptual weighting filter.
+ *
+ * @param flt_coef filter coefficients
+ * @param unq_lpc  unquantized lpc vector
+ */
+static void perceptual_filter(G723_1_Context *p, int16_t *flt_coef,
+                              int16_t *unq_lpc, int16_t *buf)
+{
+    int16_t vector[FRAME_LEN + LPC_ORDER];
+    int i, j, k, l = 0;
+
+    memcpy(buf, p->iir_mem, sizeof(int16_t) * LPC_ORDER);
+    memcpy(vector, p->fir_mem, sizeof(int16_t) * LPC_ORDER);
+    memcpy(vector + LPC_ORDER, buf + LPC_ORDER, sizeof(int16_t) * FRAME_LEN);
+
+    for (i = LPC_ORDER, j = 0; j < SUBFRAMES; i += SUBFRAME_LEN, j++) {
+        for (k = 0; k < LPC_ORDER; k++) {
+            flt_coef[k + 2*l] = (unq_lpc[k + l] * percept_flt_tbl[0][k] +
+                                  (1 << 14)) >> 15;
+            flt_coef[k + 2*l + LPC_ORDER] = (unq_lpc[k + l] * percept_flt_tbl[1][k] +
+                                  (1 << 14)) >> 15;
+        }
+        iir_filter(flt_coef + 2*l, flt_coef + 2*l + LPC_ORDER, vector + i, buf + i, 0);
+        l += LPC_ORDER;
+    }
+    memcpy(p->iir_mem, buf + FRAME_LEN, sizeof(int16_t) * LPC_ORDER);
+    memcpy(p->fir_mem, vector + FRAME_LEN, sizeof(int16_t) * LPC_ORDER);
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
@@ -1421,6 +1451,7 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
            sizeof(int16_t) * HALF_FRAME_LEN);
     memcpy(in, vector + LPC_ORDER, sizeof(int16_t) * FRAME_LEN);
 
+    perceptual_filter(p, weighted_lpc, unq_lpc, vector);
     return 0;
 }
 
