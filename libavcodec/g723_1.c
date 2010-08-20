@@ -444,6 +444,18 @@ static void lsp_interpolate(int16_t *lpc, int16_t *cur_lsp, int16_t *prev_lsp)
     }
 }
 
+static void gen_dirac_train(int16_t *buf, int pitch_lag)
+{
+    int16_t vector[SUBFRAME_LEN];
+    int i, j;
+
+    memcpy(vector, buf, SUBFRAME_LEN * sizeof(int16_t));
+    for (i = pitch_lag; i < SUBFRAME_LEN; i += pitch_lag) {
+        for (j = 0; j < SUBFRAME_LEN - i; j++)
+            buf[i + j] += vector[j];
+    }
+}
+
 /**
  * Generate fixed codebook excitation vector.
  *
@@ -480,13 +492,8 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
                 break;
         }
         /* Generate Dirac train */
-        if (subfrm.trans_gain == 1) {
-            int16_t temp_vector[SUBFRAME_LEN];
-            memcpy(temp_vector, vector, SUBFRAME_LEN * sizeof(int16_t));
-            for (i = pitch_lag; i < SUBFRAME_LEN; i += pitch_lag)
-                for (j = 0; j < SUBFRAME_LEN - i; j++)
-                    vector[i + j] += temp_vector[j];
-        }
+        if (subfrm.trans_gain == 1)
+            gen_dirac_train(vector, pitch_lag);
     } else { /* Rate5k3 */
         int16_t cb_gain  = fixed_cb_gain[subfrm.amp_index];
         int16_t cb_shift = subfrm.grid_index;
