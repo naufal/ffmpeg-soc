@@ -80,3 +80,24 @@ AVInputFormat g723_1_demuxer = {
     g723_1_read_packet,
     .extensions = "tco",
 };
+
+#if CONFIG_G723_1_MUXER
+static int g723_1_write_packet(AVFormatContext *s, AVPacket *pkt)
+{
+    put_buffer(s->pb, pkt->data, pkt->size);
+    put_flush_packet(s->pb);
+    return 0;
+}
+
+AVOutputFormat g723_1_muxer = {
+    "g723_1",
+    NULL_IF_CONFIG_SMALL("G.723.1 format"),
+    "audio/g723",
+    "tco",
+    0,
+    CODEC_ID_G723_1,
+    CODEC_ID_NONE,
+    NULL,
+    g723_1_write_packet,
+};
+#endif

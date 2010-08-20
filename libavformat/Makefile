@@ -80,6 +80,7 @@ OBJS-$(CONFIG_FOURXM_DEMUXER)            += 4xm.o
 OBJS-$(CONFIG_FRAMECRC_MUXER)            += framecrcenc.o
 OBJS-$(CONFIG_FRAMEMD5_MUXER)            += md5enc.o
 OBJS-$(CONFIG_G723_1_DEMUXER)            += g723_1.o
+OBJS-$(CONFIG_G723_1_MUXER)              += g723_1.o
 OBJS-$(CONFIG_GIF_MUXER)                 += gif.o
 OBJS-$(CONFIG_GSM_DEMUXER)               += raw.o id3v2.o
 OBJS-$(CONFIG_GXF_DEMUXER)               += gxf.o
