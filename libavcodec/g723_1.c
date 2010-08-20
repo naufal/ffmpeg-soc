@@ -1084,6 +1084,9 @@ AVCodec g723_1_decoder = {
 };
 
 #if CONFIG_G723_1_ENCODER
+#define BITSTREAM_WRITER_LE
+#include "put_bits.h"
+
 static av_cold int g723_1_encode_init(AVCodecContext *avctx)
 {
     G723_1_Context *p = avctx->priv_data;
@@ -2015,6 +2018,72 @@ static void fcb_search(G723_1_Context *p, int16_t *impulse_resp,
         gen_dirac_train(buf, p->pitch_lag[index >> 1]);
 }
 
+/**
+ * Pack the frame parameters into output bitstream.
+ *
+ * @param frame output buffer
+ * @param size  size of the buffer
+ */
+static int pack_bitstream(G723_1_Context *p, unsigned char *frame, int size)
+{
+    PutBitContext pb;
+    int info_bits, i, temp;
+
+    init_put_bits(&pb, frame, size);
+
+    if (p->cur_rate == Rate6k3) {
+        info_bits = 0;
+        put_bits(&pb, 2, info_bits);
+    }
+
+    put_bits(&pb, 8, p->lsp_index[2]);
+    put_bits(&pb, 8, p->lsp_index[1]);
+    put_bits(&pb, 8, p->lsp_index[0]);
+
+    put_bits(&pb, 7, p->pitch_lag[0] - PITCH_MIN);
+    put_bits(&pb, 2, p->subframe[1].ad_cb_lag);
+    put_bits(&pb, 7, p->pitch_lag[1] - PITCH_MIN);
+    put_bits(&pb, 2, p->subframe[3].ad_cb_lag);
+
+    /* Write 12 bit combined gain */
+    for (i = 0; i < SUBFRAMES; i++) {
+        temp = p->subframe[i].ad_cb_gain * GAIN_LEVELS +
+               p->subframe[i].amp_index;
+        if (p->cur_rate ==  Rate6k3)
+            temp += p->subframe[i].dirac_train << 11;
+        put_bits(&pb, 12, temp);
+    }
+
+    put_bits(&pb, 1, p->subframe[0].grid_index);
+    put_bits(&pb, 1, p->subframe[1].grid_index);
+    put_bits(&pb, 1, p->subframe[2].grid_index);
+    put_bits(&pb, 1, p->subframe[3].grid_index);
+
+    if (p->cur_rate == Rate6k3) {
+        skip_put_bits(&pb, 1); /* reserved bit */
+
+        /* Write 13 bit combined position index */
+        temp = (p->subframe[0].pulse_pos >> 16) * 810 +
+               (p->subframe[1].pulse_pos >> 14) *  90 +
+               (p->subframe[2].pulse_pos >> 16) *   9 +
+               (p->subframe[3].pulse_pos >> 14);
+        put_bits(&pb, 13, temp);
+
+        put_bits(&pb, 16, p->subframe[0].pulse_pos & 0xffff);
+        put_bits(&pb, 14, p->subframe[1].pulse_pos & 0x3fff);
+        put_bits(&pb, 16, p->subframe[2].pulse_pos & 0xffff);
+        put_bits(&pb, 14, p->subframe[3].pulse_pos & 0x3fff);
+
+        put_bits(&pb, 6, p->subframe[0].pulse_sign);
+        put_bits(&pb, 5, p->subframe[1].pulse_sign);
+        put_bits(&pb, 6, p->subframe[2].pulse_sign);
+        put_bits(&pb, 5, p->subframe[3].pulse_sign);
+    }
+
+    flush_put_bits(&pb);
+    return frame_size[info_bits];
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
@@ -2112,7 +2181,7 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
         memcpy(p->prev_excitation, p->prev_excitation + SUBFRAME_LEN,
                sizeof(int16_t) * (PITCH_MAX - SUBFRAME_LEN));
         for (j = 0; j < SUBFRAME_LEN; j++)
-            in[j] = av_clipl_int16((in[j] << 1) + impulse_resp[j]);
+            in[j] = av_clip_int16((in[j] << 1) + impulse_resp[j]);
         memcpy(p->prev_excitation + PITCH_MAX - SUBFRAME_LEN, in,
                sizeof(int16_t) * SUBFRAME_LEN);
 
@@ -2129,7 +2198,7 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
         in += SUBFRAME_LEN;
     }
 
-    return 0;
+    return pack_bitstream(p, buf, buf_size);
 }
 
 AVCodec g723_1_encoder = {
