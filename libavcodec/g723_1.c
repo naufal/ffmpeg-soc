@@ -513,6 +513,19 @@ static void gen_fcb_excitation(int16_t *vector, G723_1_Subframe subfrm,
     }
 }
 
+static void get_residual(int16_t *residual, int16_t *prev_excitation, int lag)
+{
+    int offset = PITCH_MAX - PITCH_ORDER / 2 - lag;
+    int i;
+
+    residual[0] = prev_excitation[offset];
+    residual[1] = prev_excitation[offset + 1];
+
+    offset += 2;
+    for (i = 2; i < SUBFRAME_LEN + PITCH_ORDER - 1; i++)
+        residual[i] = prev_excitation[offset + (i - 2) % lag];
+}
+
 /**
  * Generate adaptive codebook excitation.
  *
@@ -524,17 +537,12 @@ static void gen_acb_excitation(int16_t *vector, int16_t *prev_excitation,
 {
     int16_t residual[SUBFRAME_LEN + PITCH_ORDER - 1];
     const int16_t *cb_ptr;
-    int lag = pitch_lag + subfrm.ad_cb_lag - 1;
+
     int offset = PITCH_MAX - PITCH_ORDER / 2 - lag;
     int i;
     int64_t sum;
 
-    residual[0] = prev_excitation[offset];
-    residual[1] = prev_excitation[offset + 1];
-
-    offset += 2;
-    for (i = 2; i < SUBFRAME_LEN + PITCH_ORDER - 1; i++)
-        residual[i] = prev_excitation[offset + (i - 2) % lag];
+    get_residual(residual, prev_excitation, lag);
 
     /* Select quantization table */
     if (cur_rate == Rate6k3 && pitch_lag < SUBFRAME_LEN - 2)
