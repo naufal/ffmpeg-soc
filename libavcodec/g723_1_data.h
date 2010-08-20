@@ -90,6 +90,18 @@ typedef struct {
 } HFParam;
 
 /**
+ * Optimized fixed codebook excitation parameters
+ */
+typedef struct {
+    int min_err;
+    int amp_index;
+    int grid_index;
+    int dirac_train;
+    int pulse_pos[PULSE_MAX];
+    int pulse_sign[PULSE_MAX];
+} FCBParam;
+
+/**
  * Postfilter gain weighting factors scaled by 2^15
  */
 static const int16_t ppf_gain_weight[2] = {0x1800, 0x2000};
