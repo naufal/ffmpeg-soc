@@ -1654,6 +1654,145 @@ static void synth_percept_filter(int16_t *qnt_lpc, int16_t *perf_lpc,
     }
 }
 
+/**
+ * Compute the adaptive codebook contribution.
+ *
+ * @param buf   input signal
+ * @param index the current subframe index
+ */
+static void acb_search(G723_1_Context *p, int16_t *residual,
+                       int16_t *impulse_resp, int16_t *buf,
+                       int index)
+{
+
+    int16_t flt_buf[PITCH_ORDER][SUBFRAME_LEN];
+
+    const int16_t *cb_tbl = adaptive_cb_gain85;
+
+    int ccr_buf[PITCH_ORDER * SUBFRAMES << 2];
+
+    int pitch_lag = p->pitch_lag[index >> 1];
+    int acb_lag   = 1;
+    int acb_gain  = 0;
+    int odd_frame = index & 1;
+    int iter      = 3 + odd_frame;
+    int count     = 0;
+    int tbl_size  = 85;
+
+    int i, j, k, l, max;
+    int64_t temp;
+
+    if(!odd_frame) {
+        if (pitch_lag == PITCH_MIN)
+            pitch_lag++;
+        else
+            pitch_lag = FFMIN(pitch_lag, PITCH_MAX - 5);
+    }
+
+    /* Compute crosscorrelations and energies */
+    for (i = 0; i < iter; i++) {
+        get_residual(residual, p->prev_excitation, pitch_lag + i - 1);
+
+        for (j = 0; j < SUBFRAME_LEN; j++) {
+            temp = 0;
+            for (k = 0; k <= j; k++)
+                temp += residual[PITCH_ORDER - 1 + k] * impulse_resp[j - k];
+            flt_buf[PITCH_ORDER - 1][j] = av_clipl_int32((temp << 1) +
+                                                         (1 << 15)) >> 16;
+        }
+
+        for (j = PITCH_ORDER - 2; j >= 0; j--) {
+            flt_buf[j][0] = ((residual[j] << 13) + (1 << 14)) >> 15;
+            for (k = 1; k < SUBFRAME_LEN; k++) {
+                temp = (flt_buf[j + 1][k - 1] << 15) +
+                       residual[j] * impulse_resp[k];
+                flt_buf[j][k] = av_clipl_int32((temp << 1) + (1 << 15)) >> 16;
+            }
+        }
+
+        for (j = 0; j < PITCH_ORDER; j++) {
+            temp = dot_product(buf, flt_buf[j], SUBFRAME_LEN, 0);
+            ccr_buf[count++] = av_clipl_int32(temp << 1);
+        }
+
+        for (j = 0; j < PITCH_ORDER; j++) {
+            ccr_buf[count++] = dot_product(flt_buf[j], flt_buf[j],
+                                           SUBFRAME_LEN, 1);
+        }
+
+        for (j = 1; j < PITCH_ORDER; j++) {
+            for (k = 0; k < j; k++) {
+                temp = dot_product(flt_buf[j], flt_buf[k], SUBFRAME_LEN, 0);
+                ccr_buf[count++] = av_clipl_int32(temp << 2);
+            }
+        }
+    }
+
+    /* Normalize and shorten */
+    max = 0;
+    for (i = 0; i < 20 * iter; i++)
+        max = FFMAX(max, FFABS(ccr_buf[i]));
+
+    temp = normalize_bits_int32(max);
+
+    for (i = 0; i < 20 * iter; i++){
+        ccr_buf[i] = av_clipl_int32((int64_t)(ccr_buf[i] << temp) +
+                                    (1 << 15)) >> 16;
+    }
+
+    max = 0;
+    for (i = 0; i < iter; i++) {
+        /* Select quantization table */
+        if ((!odd_frame && pitch_lag + i - 1 >= SUBFRAME_LEN - 2) ||
+            (odd_frame && pitch_lag >= SUBFRAME_LEN - 2)) {
+            cb_tbl   = adaptive_cb_gain170;
+            tbl_size = 170;
+        }
+
+        for (j = 0, k = 0; j < tbl_size; j++, k += 20) {
+            temp = 0;
+            for (l = 0; l < 20; l++)
+                temp += ccr_buf[20 * i + l] * cb_tbl[k + l];
+            temp = av_clipl_int32(temp);
+
+            if (temp > max) {
+                max      = temp;
+                acb_gain = j;
+                acb_lag  = i;
+            }
+        }
+    }
+
+    if (!odd_frame) {
+        pitch_lag += acb_lag - 1;
+        acb_lag   =  1;
+    }
+
+    p->pitch_lag[index >> 1]      = pitch_lag;
+    p->subframe[index].ad_cb_lag  = acb_lag;
+    p->subframe[index].ad_cb_gain = acb_gain;
+}
+
+/**
+ * Subtract the adaptive codebook contribution from the input
+ * to obtain the residual.
+ *
+ * @param buf target vector
+ */
+static void sub_acb_contrib(int16_t *residual, int16_t *impulse_resp,
+                            int16_t *buf)
+{
+    int i, j;
+
+    for (i = 0; i < SUBFRAME_LEN; i++) {
+        int64_t temp = buf[i] << 14;
+        for (j = 0; j <= i; j++){
+            temp -= residual[j] * impulse_resp[i - j];
+        }
+        buf[i] = av_clipl_int32((temp << 2) + (1 << 15)) >> 16;
+    }
+}
+
 static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                                int buf_size, void *data)
 {
@@ -1712,6 +1851,7 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     offset = 0;
     for (i = 0; i < SUBFRAMES; i++) {
         int16_t impulse_resp[SUBFRAME_LEN];
+        int16_t residual[SUBFRAME_LEN + PITCH_ORDER - 1];
         int16_t flt_in[SUBFRAME_LEN];
         int16_t zero[LPC_ORDER];
 
@@ -1735,6 +1875,11 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
                              p->perf_fir_mem, p->perf_iir_mem,
                              zero, vector + PITCH_MAX, 0);
         harmonic_noise_sub(hf + i, vector + PITCH_MAX, in);
+
+        acb_search(p, residual, impulse_resp, in, i);
+        gen_acb_excitation(residual, p->prev_excitation,p->pitch_lag[i >> 1],
+                           p->subframe[i], p->cur_rate);
+        sub_acb_contrib(residual, impulse_resp, in);
 
         offset += LPC_ORDER;
         in += SUBFRAME_LEN;
