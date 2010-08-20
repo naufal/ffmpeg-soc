@@ -2116,6 +2116,15 @@ static int g723_1_encode_frame(AVCodecContext *avctx, unsigned char *buf,
         memcpy(p->prev_excitation + PITCH_MAX - SUBFRAME_LEN, in,
                sizeof(int16_t) * SUBFRAME_LEN);
 
+        /* Update filter memories */
+        synth_percept_filter(qnt_lpc + offset, weighted_lpc + (offset << 1),
+                             p->perf_fir_mem, p->perf_iir_mem,
+                             in, vector + PITCH_MAX, 0);
+        memmove(p->harmonic_mem, p->harmonic_mem + SUBFRAME_LEN,
+                sizeof(int16_t) * (PITCH_MAX - SUBFRAME_LEN));
+        memcpy(p->harmonic_mem + PITCH_MAX - SUBFRAME_LEN, vector + PITCH_MAX,
+               sizeof(int16_t) * SUBFRAME_LEN);
+
         offset += LPC_ORDER;
         in += SUBFRAME_LEN;
     }
